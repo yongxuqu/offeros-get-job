@@ -1,8 +1,10 @@
-# 阿里云学生机部署说明
+# Deployment
 
-目标配置：2 核 2G 学生 ECS 可以承载当前版本。当前服务是 Python 标准库 + SQLite + 静态前端，不需要 Node、Redis 或对象存储。AI、简历解析、语音转写都走外部 API。
+This guide describes a small single-server deployment for OfferOS. A 2 vCPU / 2 GB RAM Linux server is enough for the current SQLite-based MVP because AI, OCR, and speech-to-text workloads are delegated to external APIs.
 
-## 1. 准备服务器
+## 1. Install Runtime Dependencies
+
+Example for Alibaba Cloud Linux / CentOS-like systems:
 
 ```bash
 sudo dnf makecache
@@ -11,7 +13,7 @@ sudo mkdir -p /opt/offeros
 sudo chown -R "$USER":"$USER" /opt/offeros
 ```
 
-把项目文件上传到 `/opt/offeros`，然后创建环境变量文件：
+Upload the project to `/opt/offeros`, then install Python dependencies:
 
 ```bash
 cd /opt/offeros
@@ -21,40 +23,32 @@ cp .env.example .env
 nano .env
 ```
 
-必须改这些值：
+Set at least:
 
 ```text
 APP_ENV=production
-APP_SECRET=一串足够长的随机字符串
-ADMIN_EMAILS=你的管理邮箱
+APP_SECRET=replace-with-a-long-random-secret
+ADMIN_EMAILS=admin@example.com
 SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/MAIL_FROM
-AI_API_BASE/AI_API_KEY/AI_MODEL
-AI_RESUME_MODEL/AI_INTERVIEW_MODEL/AI_FAST_MODEL/AI_OCR_MODEL
-STT_API_URL/STT_API_KEY/STT_MODEL
+AI_API_BASE/AI_API_KEY
 ```
 
-可以先用个人 163 邮箱：
+Optional integrations:
 
 ```text
-SMTP_HOST=smtp.163.com
-SMTP_PORT=465
-SMTP_USER=你的邮箱@163.com
-SMTP_PASS=163 客户端授权码
-MAIL_FROM="OfferOS <你的邮箱@163.com>"
+RESUME_PARSE_API_URL/RESUME_PARSE_API_KEY
+STT_API_URL/STT_API_KEY/STT_MODEL
+TENCENT_DOC_ID/TENCENT_JOB_SOURCES
 ```
 
-`SMTP_PASS` 不要填邮箱登录密码。需要先在 163 网页邮箱开启 POP3/SMTP/IMAP，并生成客户端授权码。
-
-`RESUME_PARSE_API_URL` 可选。没有专门解析 API 时，系统会先尝试本地提取 DOCX/PDF 文本，再用大模型做结构化。
-
-配置完成后收紧权限，确保服务进程可以写 SQLite：
+Lock down environment-file permissions:
 
 ```bash
 sudo chmod 600 /opt/offeros/.env
 sudo chown -R nginx:nginx /opt/offeros
 ```
 
-## 2. 配置进程守护
+## 2. systemd Service
 
 ```bash
 sudo cp deploy/offeros.service /etc/systemd/system/offeros.service
@@ -63,52 +57,72 @@ sudo systemctl enable --now offeros
 sudo systemctl status offeros
 ```
 
-服务默认监听 `127.0.0.1:8000`，由 Nginx 反代到公网。
+The app listens on `127.0.0.1:8000` by default.
 
-## 3. 配置 Nginx
+## 3. Nginx Reverse Proxy
 
-先把 `deploy/nginx.conf` 里的 `server_name` 改成你的域名：
+Edit `deploy/nginx.conf` and set your server name or domain, then install it:
 
 ```bash
-sudo cp deploy/nginx.conf /etc/nginx/sites-available/offeros
-sudo ln -s /etc/nginx/sites-available/offeros /etc/nginx/sites-enabled/offeros
+sudo cp deploy/nginx.conf /etc/nginx/conf.d/offeros.conf
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-国内服务器绑定域名通常需要备案。没有域名时，可以先用公网 IP 测试 HTTP。
+Use HTTPS in production. Configure your DNS and certificate provider according to your hosting environment.
 
-## 4. 配 HTTPS
-
-如果域名已解析并备案，可以用 Certbot 或阿里云免费证书。Certbot 示例：
-
-```bash
-sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d example.com -d www.example.com
-```
-
-## 5. SQLite 备份
+## 4. SQLite Backups
 
 ```bash
 sudo chmod +x /opt/offeros/scripts/backup-sqlite.sh
 sudo mkdir -p /opt/offeros/backups
 ```
 
-编辑 root crontab：
-
-```bash
-sudo crontab -e
-```
-
-加入每天 03:20 备份：
+Add a daily backup cron:
 
 ```text
 20 3 * * * APP_DIR=/opt/offeros BACKUP_DIR=/opt/offeros/backups /opt/offeros/scripts/backup-sqlite.sh
 ```
 
-备份脚本保留最近 14 天。
+The backup script keeps the latest 14 daily backups.
 
-## 6. 上线前检查
+## 5. Job Data Import
+
+The open-source repository does not include production job data.
+
+To import your own job snapshot:
+
+```bash
+cd /opt/offeros
+python3.11 scripts/import-jobs.py path/to/jobs.json
+```
+
+Use `--replace-source SOURCE` only when you are sure deleting existing jobs from that source will not break user application records.
+
+## 6. Optional Daily Tencent Docs Sync
+
+Configure `.env` first:
+
+```bash
+TENCENT_DOC_ID=your-doc-id
+TENCENT_JOB_SOURCES=[{"name":"Campus jobs","tab":"sheet_tab_id","kind":"sheet"}]
+```
+
+Then add a daily cron. This example syncs yesterday's rows every day at midnight server time:
+
+```text
+0 0 * * * cd /opt/offeros && mkdir -p logs && python3.11 scripts/sync-tencent-jobs.py --yesterday --min-deadline today --import >> logs/tencent-jobs-sync.log 2>&1
+```
+
+Set the server timezone explicitly if the schedule must follow a local timezone:
+
+```bash
+sudo timedatectl set-timezone Asia/Shanghai
+```
+
+The sync upserts matched jobs and does not clear old job records.
+
+## 7. Smoke Tests
 
 ```bash
 python3.11 -m py_compile server.py
@@ -116,4 +130,4 @@ curl -sS http://127.0.0.1:8000/api/system/status
 sudo journalctl -u offeros -n 100 --no-pager
 ```
 
-上线前不要提交真实 `.env`。官方邮箱、AI Key、STT Key 都只放服务器环境变量里。
+Never commit real `.env` files, SQLite databases, uploaded resumes, SMTP credentials, or API keys.

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
+import datetime
 import email.message
 import base64
 import csv
 import hashlib
 import hmac
+import html
 import io
 import json
 import mimetypes
@@ -13,6 +15,7 @@ import secrets
 import shutil
 import smtplib
 import sqlite3
+import struct
 import subprocess
 import time
 import tempfile
@@ -20,6 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+import zlib
 import xml.etree.ElementTree as ET
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,7 +33,6 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 PUBLIC_DIR = BASE_DIR / "public"
 DATA_DIR = BASE_DIR / "data"
-DB_PATH = DATA_DIR / "zhixu.db"
 
 
 def load_env_file(path: Path) -> None:
@@ -52,6 +55,10 @@ def load_env_file(path: Path) -> None:
 
 load_env_file(BASE_DIR / ".env")
 
+DB_PATH = Path(os.getenv("DB_PATH", str(DATA_DIR / "zhixu.db")))
+if not DB_PATH.is_absolute():
+    DB_PATH = BASE_DIR / DB_PATH
+
 APP_ENV = os.getenv("APP_ENV", "development")
 APP_SECRET = os.getenv("APP_SECRET", "dev-secret-change-before-production")
 SESSION_TTL = 60 * 60 * 24 * 30
@@ -73,98 +80,45 @@ ADMIN_EMAILS = {item.strip().lower() for item in os.getenv("ADMIN_EMAILS", "").s
 MAX_RESUME_FILE_SIZE = 8 * 1024 * 1024
 MAX_JSON_BODY_SIZE = 12 * 1024 * 1024
 
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-JOB_SEEDS = [
-    {
-        "company": "星河科技",
-        "title": "产品经理校招",
-        "city": "上海",
-        "category": "产品",
-        "company_type": "民企",
-        "deadline": "2026-09-12",
-        "source_url": "https://careers.example.com/xinghe/pm",
-        "description": "负责用户需求分析、产品方案设计、数据复盘和跨团队推进。",
-        "requirements": ["用户研究", "产品设计", "数据分析", "沟通协作"],
-    },
-    {
-        "company": "云栈智能",
-        "title": "后端开发工程师",
-        "city": "杭州",
-        "category": "技术",
-        "company_type": "民企",
-        "deadline": "2026-09-20",
-        "source_url": "https://careers.example.com/yunzhan/backend",
-        "description": "参与核心业务 API、数据库建模、任务队列和系统稳定性建设。",
-        "requirements": ["Python", "Java", "数据库", "后端开发", "API"],
-    },
-    {
-        "company": "海辰金融",
-        "title": "数据分析管培生",
-        "city": "上海",
-        "category": "数据",
-        "company_type": "央企",
-        "deadline": "2026-09-05",
-        "source_url": "https://careers.example.com/haichen/data",
-        "description": "围绕业务指标、用户分层、投放效果和经营数据进行分析。",
-        "requirements": ["SQL", "Python", "数据分析", "财务分析", "可视化"],
-    },
-    {
-        "company": "极点汽车",
-        "title": "供应链计划专员",
-        "city": "深圳",
-        "category": "供应链",
-        "company_type": "国企",
-        "deadline": "2026-09-18",
-        "source_url": "https://careers.example.com/jidian/scm",
-        "description": "支持需求预测、供应计划、库存分析和跨部门协同。",
-        "requirements": ["供应链", "数据分析", "Excel", "沟通协作"],
-    },
-    {
-        "company": "观远咨询",
-        "title": "商业分析顾问",
-        "city": "北京",
-        "category": "咨询",
-        "company_type": "外企",
-        "deadline": "2026-09-25",
-        "source_url": "https://careers.example.com/guanyuan/ba",
-        "description": "参与行业研究、访谈分析、商业建模和客户汇报材料撰写。",
-        "requirements": ["行业研究", "咨询", "数据分析", "表达汇报"],
-    },
-    {
-        "company": "灵犀互娱",
-        "title": "用户运营校招",
-        "city": "广州",
-        "category": "运营",
-        "company_type": "民企",
-        "deadline": "2026-09-08",
-        "source_url": "https://careers.example.com/lingxi/operation",
-        "description": "负责活动策划、用户增长、社群运营和数据复盘。",
-        "requirements": ["用户增长", "内容运营", "活动策划", "数据分析"],
-    },
-    {
-        "company": "矩阵安全",
-        "title": "安全工程师校招",
-        "city": "北京",
-        "category": "技术",
-        "company_type": "民企",
-        "deadline": "2026-09-30",
-        "source_url": "https://careers.example.com/matrix/sec",
-        "description": "参与 Web 安全、漏洞分析、安全工具开发和应急响应。",
-        "requirements": ["网络安全", "Python", "Linux", "Web 安全"],
-    },
-    {
-        "company": "青岚制造",
-        "title": "市场营销管培生",
-        "city": "成都",
-        "category": "市场",
-        "company_type": "事业单位",
-        "deadline": "2026-09-16",
-        "source_url": "https://careers.example.com/qinglan/marketing",
-        "description": "支持品牌传播、渠道活动、市场调研和销售线索分析。",
-        "requirements": ["市场调研", "品牌传播", "活动策划", "沟通协作"],
-    },
-]
+def load_tencent_job_sources() -> list:
+    raw_sources = os.getenv("TENCENT_JOB_SOURCES", "").strip()
+    if not raw_sources:
+        return []
+    try:
+        parsed = json.loads(raw_sources)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    sources = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        tab = str(item.get("tab") or "").strip()
+        kind = str(item.get("kind") or "sheet").strip()
+        if not tab or kind not in {"sheet", "smart"}:
+            continue
+        source = {
+            "name": str(item.get("name") or tab).strip(),
+            "tab": tab,
+            "kind": kind,
+        }
+        view_id = str(item.get("view_id") or item.get("viewId") or "").strip()
+        if view_id:
+            source["view_id"] = view_id
+        sources.append(source)
+    return sources
+
+
+TENCENT_DOC_ID = os.getenv("TENCENT_DOC_ID", "").strip()
+TENCENT_JOB_SOURCES = load_tencent_job_sources()
+JOB_BATCHES = ("27届秋招", "实习", "26届春招")
+DEFAULT_SYNC_START_DATE = "2026-07-01"
+DEFAULT_SYNC_END_DATE = "2026-08-18"
+DEFAULT_MIN_DEADLINE_DATE = "2026-08-18"
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 KEYWORD_MAP = {
     "Python": ["python", "爬虫", "flask", "fastapi", "django"],
@@ -234,8 +188,48 @@ def connect_db() -> sqlite3.Connection:
     return conn
 
 
+def migrate_jobs_unique_constraint(conn: sqlite3.Connection) -> None:
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'").fetchone()
+    table_sql = row["sql"] if row else ""
+    if "source_url TEXT NOT NULL UNIQUE" not in table_sql:
+        return
+
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.executescript(
+        """
+        CREATE TABLE jobs_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company TEXT NOT NULL,
+            title TEXT NOT NULL,
+            city TEXT NOT NULL,
+            category TEXT NOT NULL,
+            company_type TEXT NOT NULL DEFAULT '未分类',
+            batch TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT 'manual',
+            deadline TEXT NOT NULL,
+            source_url TEXT NOT NULL,
+            description TEXT NOT NULL,
+            requirements TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(company, source_url)
+        );
+
+        INSERT OR IGNORE INTO jobs_new
+        (id, company, title, city, category, company_type, batch, source, deadline, source_url, description, requirements, updated_at)
+        SELECT id, company, title, city, category, company_type, batch, source, deadline, source_url, description, requirements, updated_at
+        FROM jobs
+        ORDER BY id;
+
+        DROP TABLE jobs;
+        ALTER TABLE jobs_new RENAME TO jobs;
+        """
+    )
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
 def init_db() -> None:
-    DATA_DIR.mkdir(exist_ok=True)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with connect_db() as conn:
         conn.executescript(
             """
@@ -291,11 +285,14 @@ def init_db() -> None:
                 city TEXT NOT NULL,
                 category TEXT NOT NULL,
                 company_type TEXT NOT NULL DEFAULT '未分类',
+                batch TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT 'manual',
                 deadline TEXT NOT NULL,
-                source_url TEXT NOT NULL UNIQUE,
+                source_url TEXT NOT NULL,
                 description TEXT NOT NULL,
                 requirements TEXT NOT NULL,
-                updated_at INTEGER NOT NULL
+                updated_at INTEGER NOT NULL,
+                UNIQUE(company, source_url)
             );
 
             CREATE TABLE IF NOT EXISTS applications (
@@ -321,30 +318,12 @@ def init_db() -> None:
         job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
         if "company_type" not in job_columns:
             conn.execute("ALTER TABLE jobs ADD COLUMN company_type TEXT NOT NULL DEFAULT '未分类'")
-        for job in JOB_SEEDS:
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO jobs
-                (company, title, city, category, company_type, deadline, source_url, description, requirements, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    job["company"],
-                    job["title"],
-                    job["city"],
-                    job["category"],
-                    job["company_type"],
-                    job["deadline"],
-                    job["source_url"],
-                    job["description"],
-                    json.dumps(job["requirements"], ensure_ascii=False),
-                    now(),
-                ),
-            )
-            conn.execute(
-                "UPDATE jobs SET company_type = ? WHERE source_url = ?",
-                (job["company_type"], job["source_url"]),
-            )
+        if "batch" not in job_columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN batch TEXT NOT NULL DEFAULT ''")
+        if "source" not in job_columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
+        migrate_jobs_unique_constraint(conn)
+        conn.execute("DELETE FROM jobs WHERE source_url LIKE 'https://careers.example.com/%'")
 
 
 def hash_code(email: str, code: str) -> str:
@@ -386,6 +365,13 @@ def send_email_code(email_addr: str, code: str) -> bool:
     return True
 
 
+def job_source_update_date(description: str, fallback_ts=None) -> str:
+    match = re.search(r"(?:^|\n)更新[：:]\s*(\d{4}-\d{2}-\d{2})", str(description or ""))
+    if match:
+        return match.group(1)
+    return utc_string(fallback_ts)[:10] if fallback_ts else ""
+
+
 def row_to_job(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
@@ -394,10 +380,13 @@ def row_to_job(row: sqlite3.Row) -> dict:
         "city": row["city"],
         "category": row["category"],
         "companyType": row["company_type"],
+        "batch": row["batch"],
+        "source": row["source"],
         "deadline": row["deadline"],
         "sourceUrl": row["source_url"],
         "description": row["description"],
         "requirements": json.loads(row["requirements"]),
+        "sourceDate": job_source_update_date(row["description"], row["updated_at"]),
         "updatedAt": utc_string(row["updated_at"]),
     }
 
@@ -963,43 +952,191 @@ def normalize_csv_row(row: dict) -> dict:
         "公司": "company",
         "公司名称": "company",
         "企业": "company",
+        "企业/招聘单位名称": "company",
         "岗位": "title",
         "岗位名称": "title",
         "职位": "title",
+        "招聘岗位": "title",
         "城市": "city",
         "工作城市": "city",
+        "工作地点": "city",
         "岗位方向": "category",
         "岗位类别": "category",
         "类别": "category",
+        "所属行业": "category",
+        "行业分类": "category",
         "企业类型": "companyType",
         "公司类型": "companyType",
         "类型": "companyType",
+        "企业性质": "companyType",
+        "企业/单位性质": "companyType",
+        "招聘类型": "batch",
+        "招聘类型/批次": "batch",
+        "批次": "batch",
         "截止时间": "deadline",
         "投递截止": "deadline",
         "截止日期": "deadline",
+        "网申截止时间": "deadline",
         "官方链接": "sourceUrl",
         "网申链接": "sourceUrl",
         "校招链接": "sourceUrl",
         "链接": "sourceUrl",
+        "投递渠道": "sourceUrl",
+        "投递方式": "sourceUrl",
+        "企业招聘公告": "announcementUrl",
+        "官方招聘推文": "announcementUrl",
         "JD": "description",
         "职位描述": "description",
         "岗位描述": "description",
+        "备注": "description",
         "岗位要求": "requirements",
         "能力要求": "requirements",
+        "招聘对象": "target",
+        "日期": "sourceDate",
+        "更新/开启时间": "sourceDate",
     }
     normalized = {}
     for key, value in row.items():
         clean_key = (key or "").strip()
         target = aliases.get(clean_key, clean_key)
-        normalized[target] = (value or "").strip()
+        if isinstance(value, list):
+            normalized[target] = value
+        else:
+            normalized[target] = str(value or "").strip()
     return normalized
+
+
+def clean_text(value) -> str:
+    text = re.sub(r"[\x00-\x08\x0b-\x1f]+", " ", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def clean_url(value) -> str:
+    text = str(value or "")
+    match = re.search(r"https?://[^\s\x00\"<>]+", text)
+    if not match:
+        return ""
+    url = match.group(0)
+    url = re.split(r"[\x00-\x1f]", url, maxsplit=1)[0]
+    url = url.rstrip("&;,，。()（）[]【】")
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return ""
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    if parsed.query:
+        query_items = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        query_items = [
+            (key, val)
+            for key, val in query_items
+            if val.strip() or key.lower() not in {"sessionid", "session_id"}
+        ]
+        url = urllib.parse.urlunsplit(
+            parsed._replace(query=urllib.parse.urlencode(query_items, doseq=True))
+        )
+    return url
+
+
+def first_url(*values) -> str:
+    for value in values:
+        url = clean_url(value)
+        if url:
+            return url
+    return ""
+
+
+def parse_date_value(value):
+    if isinstance(value, datetime.date):
+        return value
+    if isinstance(value, (int, float)) and 20000 <= float(value) <= 60000:
+        return datetime.date(1899, 12, 30) + datetime.timedelta(days=int(float(value)))
+
+    text = clean_text(value)
+    if not text or any(marker in text for marker in ("尽快", "招满", "长期", "即止")):
+        return None
+
+    patterns = [
+        r"(20\d{2})[./-](\d{1,2})[./-](\d{1,2})",
+        r"(20\d{2})年(\d{1,2})月(\d{1,2})日?",
+        r"\b(2[6-9])[./-](\d{1,2})[./-](\d{1,2})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        year = int(match.group(1))
+        if year < 100:
+            year += 2000
+        month = int(match.group(2))
+        day = int(match.group(3))
+        try:
+            return datetime.date(year, month, day)
+        except ValueError:
+            return None
+    return None
+
+
+def iso_date(value) -> str:
+    parsed = parse_date_value(value)
+    return parsed.isoformat() if parsed else clean_text(value)
+
+
+def normalize_job_batch(value) -> str:
+    text = clean_text(value)
+    if not text:
+        return ""
+    if "实习" in text or "暑期" in text:
+        return "实习"
+    if "春招" in text:
+        return "26届春招"
+    if "秋招" in text or "校招" in text or "提前批" in text or "2027" in text or "27届" in text:
+        return "27届秋招"
+    return ""
+
+
+def normalize_company_type(value) -> str:
+    text = clean_text(value) or "未分类"
+    if "民营" in text:
+        return "民企"
+    if "央国企" in text:
+        return "央国企"
+    if "央企" in text:
+        return "央企"
+    if "国企" in text:
+        return "国企"
+    if "外企" in text:
+        return "外企"
+    return text
+
+
+def normalize_city(value) -> str:
+    text = clean_text(value)
+    if not text:
+        return "未标注"
+    text = text.replace("、", " ").replace("，", " ").replace(",", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def split_job_tokens(*values) -> list:
+    tokens = []
+    for value in values:
+        text = clean_text(value)
+        if not text:
+            continue
+        for item in re.split(r"[、,，;；/\n\r\t ]+", text):
+            item = item.strip("：:；;，,。")
+            if 1 < len(item) <= 24 and item not in tokens:
+                tokens.append(item)
+    return tokens
 
 
 def sanitize_job_payload(payload: dict) -> dict:
     job = normalize_csv_row(payload)
     company = (job.get("company") or "").strip()
     title = (job.get("title") or "").strip()
-    source_url = (job.get("sourceUrl") or job.get("source_url") or "").strip()
+    source_url = clean_url(job.get("sourceUrl") or job.get("source_url") or "")
     if not company or not title or not source_url:
         raise ValueError("job requires company, title and sourceUrl")
     return {
@@ -1009,6 +1146,8 @@ def sanitize_job_payload(payload: dict) -> dict:
         "city": (job.get("city") or "未标注").strip(),
         "category": (job.get("category") or "未分类").strip(),
         "company_type": (job.get("companyType") or job.get("company_type") or "未分类").strip(),
+        "batch": normalize_job_batch(job.get("batch") or job.get("category") or ""),
+        "source": (job.get("source") or "manual").strip(),
         "deadline": (job.get("deadline") or "待确认").strip(),
         "source_url": source_url,
         "description": (job.get("description") or "").strip(),
@@ -1024,7 +1163,7 @@ def upsert_job(conn: sqlite3.Connection, payload: dict) -> int:
         conn.execute(
             """
             UPDATE jobs
-            SET company = ?, title = ?, city = ?, category = ?, company_type = ?,
+            SET company = ?, title = ?, city = ?, category = ?, company_type = ?, batch = ?, source = ?,
                 deadline = ?, source_url = ?, description = ?, requirements = ?, updated_at = ?
             WHERE id = ?
             """,
@@ -1034,6 +1173,8 @@ def upsert_job(conn: sqlite3.Connection, payload: dict) -> int:
                 job["city"],
                 job["category"],
                 job["company_type"],
+                job["batch"],
+                job["source"],
                 job["deadline"],
                 job["source_url"],
                 job["description"],
@@ -1047,14 +1188,16 @@ def upsert_job(conn: sqlite3.Connection, payload: dict) -> int:
     conn.execute(
         """
         INSERT INTO jobs
-        (company, title, city, category, company_type, deadline, source_url, description, requirements, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(source_url) DO UPDATE SET
+        (company, title, city, category, company_type, batch, source, deadline, source_url, description, requirements, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(company, source_url) DO UPDATE SET
             company = excluded.company,
             title = excluded.title,
             city = excluded.city,
             category = excluded.category,
             company_type = excluded.company_type,
+            batch = excluded.batch,
+            source = excluded.source,
             deadline = excluded.deadline,
             description = excluded.description,
             requirements = excluded.requirements,
@@ -1066,6 +1209,8 @@ def upsert_job(conn: sqlite3.Connection, payload: dict) -> int:
             job["city"],
             job["category"],
             job["company_type"],
+            job["batch"],
+            job["source"],
             job["deadline"],
             job["source_url"],
             job["description"],
@@ -1073,7 +1218,10 @@ def upsert_job(conn: sqlite3.Connection, payload: dict) -> int:
             now(),
         ),
     )
-    return conn.execute("SELECT id FROM jobs WHERE source_url = ?", (job["source_url"],)).fetchone()["id"]
+    return conn.execute(
+        "SELECT id FROM jobs WHERE company = ? AND source_url = ?",
+        (job["company"], job["source_url"]),
+    ).fetchone()["id"]
 
 
 def parse_jobs_csv(csv_text: str) -> list:
@@ -1082,6 +1230,527 @@ def parse_jobs_csv(csv_text: str) -> list:
         return []
     reader = csv.DictReader(io.StringIO(text))
     return [normalize_csv_row(row) for row in reader]
+
+
+def tencent_page_url(source: dict) -> str:
+    query = {"tab": source["tab"]}
+    if source.get("view_id"):
+        query["viewId"] = source["view_id"]
+    return f"https://docs.qq.com/sheet/{TENCENT_DOC_ID}?{urllib.parse.urlencode(query)}"
+
+
+def parse_client_vars_callback(text: str) -> dict:
+    match = re.match(r"clientVarsCallback\((.*)\)\s*;?\s*$", text, re.S)
+    if not match:
+        raise ValueError("invalid_tencent_response")
+    return json.loads(match.group(1))
+
+
+def fetch_tencent_payload(source: dict, full: bool = True) -> dict:
+    page_url = tencent_page_url(source)
+    jar = urllib.request.HTTPCookieProcessor()
+    opener = urllib.request.build_opener(jar)
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "*/*"}
+    page_req = urllib.request.Request(page_url, headers=headers)
+    with opener.open(page_req, timeout=20) as response:
+        html_text = response.read(300000).decode("utf-8", "replace")
+
+    candidates = re.findall(r'(?:href|src)="([^"]*dop-api/opendoc[^"]*)"', html_text)
+    if not candidates:
+        raise ValueError("tencent_opendoc_url_not_found")
+    opendoc_url = html.unescape(candidates[0])
+    if opendoc_url.startswith("//"):
+        opendoc_url = "https:" + opendoc_url
+    elif opendoc_url.startswith("/"):
+        opendoc_url = urllib.parse.urljoin(page_url, opendoc_url)
+
+    def load(url: str) -> dict:
+        req = urllib.request.Request(url, headers={**headers, "Referer": page_url})
+        with opener.open(req, timeout=60) as response:
+            return parse_client_vars_callback(response.read().decode("utf-8", "replace"))
+
+    payload = load(opendoc_url)
+    if not full:
+        return payload
+
+    item = tencent_initial_text_item(payload)
+    max_row = int(item.get("max_row") or item.get("end_row_index") or 1000)
+    parsed = urllib.parse.urlsplit(opendoc_url)
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    if source["kind"] == "smart":
+        query["startrow"] = ["0"]
+        query["endrow"] = [str(max_row)]
+    else:
+        query["startrow"] = ["0"]
+        query["endrow"] = [str(max_row)]
+        query["block_start_row"] = ["0"]
+        query["block_end_row"] = [str(max_row)]
+        query["block_start_col"] = ["0"]
+        query["block_end_col"] = [str(int(item.get("max_col") or 31))]
+    full_url = urllib.parse.urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urllib.parse.urlencode(query, doseq=True), parsed.fragment)
+    )
+    return load(full_url)
+
+
+def tencent_initial_text_item(payload: dict) -> dict:
+    try:
+        return payload["clientVars"]["collab_client_vars"]["initialAttributedText"]["text"][0]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError("invalid_tencent_payload") from exc
+
+
+def tencent_cell_text(field_id: str, cell: dict, option_names: dict) -> str:
+    if not isinstance(cell, dict):
+        return ""
+    values = []
+    for segment in cell.get("1") or []:
+        if not isinstance(segment, dict):
+            continue
+        if segment.get("1") == "url":
+            values.append(segment.get("3") or segment.get("2") or "")
+        else:
+            values.append(segment.get("2") or segment.get("3") or "")
+    for key in ("17", "9"):
+        selected = cell.get(key)
+        if selected is None:
+            continue
+        if not isinstance(selected, list):
+            selected = [selected]
+        for option_id in selected:
+            values.append(option_names.get(field_id, {}).get(option_id, str(option_id)))
+    return clean_text(" / ".join(str(value) for value in values if str(value).strip()))
+
+
+def parse_tencent_smart_rows(source: dict, payload: dict) -> list:
+    item = tencent_initial_text_item(payload)
+    messages = json.loads(item.get("smartsheet") or "[]")
+    if not messages or len(messages[0]) < 2:
+        return []
+    field_defs = messages[0][0]["c"]["3"]["3"]
+    field_names = {field_id: field.get("30", "") for field_id, field in field_defs.items()}
+    option_names = {}
+    for field_id, field in field_defs.items():
+        options = {}
+        for option_key in ("17", "9"):
+            option_block = field.get(option_key)
+            if isinstance(option_block, dict):
+                for option in option_block.get("3") or []:
+                    if isinstance(option, dict):
+                        options[option.get("1")] = option.get("2")
+        option_names[field_id] = options
+
+    rows = []
+    row_entries = messages[0][1]["c"]["2"]["1"]
+    for row_id, row_entry in row_entries.items():
+        cells = row_entry.get("1", row_entry) if isinstance(row_entry, dict) else {}
+        row = {"_source": source["name"], "_sourceKind": source["kind"], "_rowId": row_id}
+        for field_id, cell in cells.items():
+            name = field_names.get(field_id, field_id)
+            value = tencent_cell_text(field_id, cell, option_names)
+            if value:
+                row[name] = value
+        rows.append(row)
+    return rows
+
+
+def read_proto_varint(data: bytes, pos: int, end: int):
+    shift = 0
+    value = 0
+    while pos < end:
+        byte = data[pos]
+        pos += 1
+        value |= (byte & 0x7F) << shift
+        if byte < 128:
+            return value, pos
+        shift += 7
+        if shift > 70:
+            raise ValueError("varint_too_long")
+    raise ValueError("unexpected_eof")
+
+
+def parse_proto_fields(data: bytes) -> list:
+    fields = []
+    pos = 0
+    end = len(data)
+    while pos < end:
+        key, pos = read_proto_varint(data, pos, end)
+        field_no = key >> 3
+        wire_type = key & 7
+        if field_no <= 0:
+            raise ValueError("invalid_proto_field")
+        if wire_type == 0:
+            value, pos = read_proto_varint(data, pos, end)
+        elif wire_type == 1:
+            value = data[pos : pos + 8]
+            pos += 8
+        elif wire_type == 2:
+            length, pos = read_proto_varint(data, pos, end)
+            value = data[pos : pos + length]
+            pos += length
+        elif wire_type == 5:
+            value = data[pos : pos + 4]
+            pos += 4
+        else:
+            raise ValueError("unsupported_proto_wire_type")
+        if pos > end:
+            raise ValueError("unexpected_eof")
+        fields.append((field_no, wire_type, value))
+    return fields
+
+
+def proto_field1_varint(data: bytes):
+    try:
+        for field_no, wire_type, value in parse_proto_fields(data):
+            if field_no == 1 and wire_type == 0:
+                return value
+    except ValueError:
+        return None
+    return None
+
+
+def decode_text_container(data: bytes) -> str:
+    try:
+        fields = parse_proto_fields(data)
+        if len(fields) == 1 and fields[0][0] == 1 and fields[0][1] == 2:
+            return fields[0][2].decode("utf-8", "replace")
+    except ValueError:
+        pass
+    return data.decode("utf-8", "replace")
+
+
+def decode_tencent_pool_entry(data: bytes) -> dict:
+    entry = {"text": "", "url": "", "number": None}
+    try:
+        fields = parse_proto_fields(data)
+    except ValueError:
+        entry["text"] = clean_text(data.decode("utf-8", "replace"))
+        return entry
+
+    if len(fields) == 1 and fields[0][0] == 1 and fields[0][1] == 1:
+        entry["number"] = struct.unpack("<d", fields[0][2])[0]
+        return entry
+
+    texts = []
+    urls = []
+    for field_no, wire_type, value in fields:
+        if wire_type != 2:
+            continue
+        decoded = value.decode("utf-8", "ignore")
+        found_url = clean_url(decoded)
+        if found_url:
+            urls.append(found_url)
+
+        if field_no in (1, 3):
+            text_value = clean_text(decode_text_container(value))
+            if text_value and "Helvetica" not in text_value and "FFFF" not in text_value:
+                texts.append(text_value)
+
+        try:
+            for sub_no, sub_wire, sub_value in parse_proto_fields(value):
+                if sub_wire != 2:
+                    continue
+                sub_decoded = sub_value.decode("utf-8", "ignore")
+                found_url = clean_url(sub_decoded)
+                if found_url:
+                    urls.append(found_url)
+                if sub_no in (1, 3):
+                    text_value = clean_text(decode_text_container(sub_value))
+                    if text_value and "Helvetica" not in text_value and "FFFF" not in text_value:
+                        texts.append(text_value)
+        except ValueError:
+            pass
+
+    entry["url"] = urls[0] if urls else ""
+    entry["text"] = texts[-1] if texts else ""
+    return entry
+
+
+def parse_tencent_sheet_rows(source: dict, payload: dict) -> list:
+    item = tencent_initial_text_item(payload)
+    block_datas = item.get("block_datas") or []
+    if not block_datas:
+        return []
+    compressed = base64.b64decode(block_datas[0]["related_sheet"])
+    raw = zlib.decompress(compressed)
+
+    root = parse_proto_fields(raw)
+    root_payload = next((value for _, wire_type, value in root if wire_type == 2), None)
+    if not root_payload:
+        return []
+    inner = parse_proto_fields(root_payload)
+    data_payloads = [value for _, wire_type, value in inner if wire_type == 2]
+    if not data_payloads:
+        return []
+    sheet_block = parse_proto_fields(max(data_payloads, key=len))
+    sheet_payload = next((value for field_no, wire_type, value in sheet_block if field_no == 19 and wire_type == 2), None)
+    if not sheet_payload:
+        sheet_payload = max((value for _, wire_type, value in sheet_block if wire_type == 2), key=len, default=None)
+    if not sheet_payload:
+        return []
+    sheet_fields = parse_proto_fields(sheet_payload)
+    value_pool = []
+    cell_messages = []
+    for field_no, wire_type, value in sheet_fields:
+        if field_no == 5 and wire_type == 2:
+            for pool_message in parse_proto_fields(value):
+                if pool_message[1] == 2:
+                    value_pool.append(decode_tencent_pool_entry(pool_message[2]))
+        elif field_no == 6 and wire_type == 2:
+            cell_messages.append(value)
+
+    numeric_values = [item["number"] for item in value_pool if item.get("number") is not None]
+    numeric_index = 0
+    table = {}
+    link_entries = [item for item in value_pool if item.get("url")]
+
+    for message in cell_messages:
+        row = 0
+        col = 0
+        kind = None
+        value_index = None
+        for field_no, wire_type, value in parse_proto_fields(message):
+            if field_no == 1 and wire_type == 0:
+                row = value
+            elif field_no == 2 and wire_type == 0:
+                col = value
+            elif field_no == 3 and wire_type == 2:
+                try:
+                    content_fields = parse_proto_fields(value)
+                except ValueError:
+                    continue
+                for content_no, content_wire, content_value in content_fields:
+                    if content_no == 1 and content_wire == 0:
+                        kind = content_value
+                    elif content_no == 2 and content_wire == 2:
+                        value_index = proto_field1_varint(content_value)
+        cell_value = ""
+        if kind == 2 and numeric_index < len(numeric_values):
+            cell_value = iso_date(numeric_values[numeric_index])
+            numeric_index += 1
+        elif kind != 6 and value_index is not None and 0 <= value_index < len(value_pool):
+            pool_value = value_pool[value_index]
+            cell_value = pool_value.get("text") or pool_value.get("url") or ""
+        if cell_value:
+            table.setdefault(row, {})[col] = clean_text(cell_value)
+
+    header_row_index = None
+    headers = {}
+    for row_index, cells in table.items():
+        if any(value == "企业/招聘单位名称" for value in cells.values()):
+            header_row_index = row_index
+            headers = {col: value for col, value in cells.items() if value}
+            break
+    if header_row_index is None:
+        return []
+
+    data_rows = []
+    for row_index in sorted(row for row in table if row > header_row_index):
+        mapped = {"_source": source["name"], "_sourceKind": source["kind"], "_rowId": str(row_index)}
+        for col, header in headers.items():
+            value = table[row_index].get(col, "")
+            if value:
+                mapped[header] = value
+        if mapped.get("企业/招聘单位名称"):
+            data_rows.append(mapped)
+
+    link_index = 0
+    for row in data_rows:
+        row_links = []
+        while link_index < len(link_entries) and len(row_links) < 2:
+            row_links.append(link_entries[link_index])
+            link_index += 1
+        delivery = next(
+            (
+                item
+                for item in row_links
+                if any(marker in item.get("text", "") for marker in ("投递", "报名", "网申", "方式", "渠道"))
+            ),
+            row_links[0] if row_links else None,
+        )
+        announcement = next((item for item in row_links if item is not delivery), None)
+        if delivery and delivery.get("url"):
+            row["投递方式"] = delivery["url"]
+        if announcement and announcement.get("url"):
+            row["官方招聘推文"] = announcement["url"]
+    return data_rows
+
+
+def parse_tencent_source_rows(source: dict) -> list:
+    payload = fetch_tencent_payload(source, full=True)
+    if source["kind"] == "smart":
+        return parse_tencent_smart_rows(source, payload)
+    return parse_tencent_sheet_rows(source, payload)
+
+
+def source_date_in_window(value, start_date, end_date) -> bool:
+    parsed = parse_date_value(value)
+    return bool(parsed and start_date <= parsed <= end_date)
+
+
+def deadline_is_valid(value, min_deadline) -> bool:
+    parsed = parse_date_value(value)
+    return not parsed or parsed >= min_deadline
+
+
+def tencent_row_to_job(row: dict, start_date, end_date, min_deadline):
+    normalized = normalize_csv_row(row)
+    source_date = normalized.get("sourceDate") or row.get("日期") or row.get("更新/开启时间")
+    if not source_date_in_window(source_date, start_date, end_date):
+        return None, "更新日期不在窗口内"
+
+    batch = normalize_job_batch(normalized.get("batch") or "")
+    if batch not in JOB_BATCHES:
+        return None, "批次不在三类里"
+
+    deadline = normalized.get("deadline") or ""
+    if not deadline_is_valid(deadline, min_deadline):
+        return None, f"明确截止日期已早于 {min_deadline.isoformat()}"
+
+    company = clean_text(normalized.get("company"))
+    delivery_url = first_url(normalized.get("sourceUrl"))
+    announcement_url = first_url(normalized.get("announcementUrl"))
+    source_url = delivery_url or announcement_url
+    if not company:
+        return None, "缺公司名称"
+    if not source_url:
+        return None, "缺投递/公告链接"
+
+    positions = clean_text(normalized.get("title"))
+    industry = clean_text(normalized.get("category")) or "未分类"
+    target = clean_text(normalized.get("target"))
+    note = clean_text(normalized.get("description"))
+    raw_batch = clean_text(normalized.get("batch"))
+    deadline_text = iso_date(deadline) or "尽快投递"
+
+    requirements = split_job_tokens(batch, industry, positions, target)[:10]
+    description_parts = [
+        f"更新：{iso_date(source_date)}",
+        f"批次：{raw_batch or batch}",
+    ]
+    if target:
+        description_parts.append(f"对象：{target}")
+    if positions:
+        description_parts.append(f"招聘岗位：{positions}")
+    if note:
+        description_parts.append(f"备注：{note}")
+    if announcement_url and announcement_url != source_url:
+        description_parts.append(f"公告：{announcement_url}")
+
+    return {
+        "company": company,
+        "title": "招聘岗位合集",
+        "city": normalize_city(normalized.get("city")),
+        "category": industry,
+        "companyType": normalize_company_type(normalized.get("companyType")),
+        "batch": batch,
+        "source": "tencent",
+        "deadline": deadline_text,
+        "sourceUrl": source_url,
+        "description": "\n".join(description_parts),
+        "requirements": requirements or [batch],
+    }, ""
+
+
+def canonical_sync_key(job: dict) -> str:
+    company = re.sub(r"[\s·•|｜\-_（）()]+", "", job["company"]).lower()
+    try:
+        parsed = urllib.parse.urlsplit(job["sourceUrl"])
+    except ValueError:
+        return f"{company}|{clean_text(job.get('sourceUrl')).lower()}"
+    path = parsed.path.rstrip("/")
+    query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    stable_query = urllib.parse.urlencode(sorted(query))
+    url = urllib.parse.urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, stable_query, ""))
+    return f"{company}|{url}"
+
+
+def merge_text_values(*values, limit: int = 260) -> str:
+    parts = []
+    for value in values:
+        for item in re.split(r"[ /、，,]+", clean_text(value)):
+            if item and item not in parts:
+                parts.append(item)
+    merged = " ".join(parts)
+    return merged[:limit] if len(merged) > limit else merged
+
+
+def merge_tencent_jobs(jobs: list) -> list:
+    merged = {}
+    for job in jobs:
+        key = canonical_sync_key(job)
+        if key not in merged:
+            merged[key] = job
+            continue
+        current = merged[key]
+        current["city"] = merge_text_values(current.get("city"), job.get("city")) or "未标注"
+        current["category"] = merge_text_values(current.get("category"), job.get("category")) or "未分类"
+        current["companyType"] = merge_text_values(current.get("companyType"), job.get("companyType")) or "未分类"
+        if not current.get("batch"):
+            current["batch"] = job.get("batch", "")
+        current["deadline"] = current.get("deadline") if parse_date_value(current.get("deadline")) else job.get("deadline") or current.get("deadline")
+        current["description"] = "\n".join(
+            part
+            for part in [current.get("description", ""), job.get("description", "")]
+            if part and part not in current.get("description", "")
+        )
+        requirements = []
+        for item in current.get("requirements", []) + job.get("requirements", []):
+            if item and item not in requirements:
+                requirements.append(item)
+        current["requirements"] = requirements[:12]
+    return list(merged.values())
+
+
+def collect_tencent_jobs(start_date=None, end_date=None, min_deadline=None) -> dict:
+    start = parse_date_value(start_date or DEFAULT_SYNC_START_DATE)
+    end = parse_date_value(end_date or DEFAULT_SYNC_END_DATE)
+    deadline_floor = parse_date_value(min_deadline or DEFAULT_MIN_DEADLINE_DATE)
+    if not start or not end or not deadline_floor:
+        raise ValueError("invalid_sync_date")
+
+    scanned = 0
+    jobs = []
+    skipped = {}
+    source_stats = []
+    for source in TENCENT_JOB_SOURCES:
+        rows = parse_tencent_source_rows(source)
+        kept = 0
+        source_skipped = {}
+        for row in rows:
+            scanned += 1
+            job, reason = tencent_row_to_job(row, start, end, deadline_floor)
+            if job:
+                jobs.append(job)
+                kept += 1
+            else:
+                skipped[reason] = skipped.get(reason, 0) + 1
+                source_skipped[reason] = source_skipped.get(reason, 0) + 1
+        source_stats.append(
+            {
+                "name": source["name"],
+                "tab": source["tab"],
+                "scanned": len(rows),
+                "kept": kept,
+                "skipped": source_skipped,
+            }
+        )
+
+    merged_jobs = merge_tencent_jobs(jobs)
+    return {
+        "jobs": merged_jobs,
+        "summary": {
+            "startDate": start.isoformat(),
+            "endDate": end.isoformat(),
+            "minDeadline": deadline_floor.isoformat(),
+            "scanned": scanned,
+            "matched": len(jobs),
+            "deduped": max(0, len(jobs) - len(merged_jobs)),
+            "ready": len(merged_jobs),
+            "skipped": skipped,
+            "sources": source_stats,
+        },
+    }
 
 
 def format_list_items(items: list, fields: list) -> str:
@@ -1229,6 +1898,7 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
 
@@ -1357,6 +2027,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.handle_admin_upsert_job()
             elif method == "POST" and path == "/api/admin/jobs/import-csv":
                 self.handle_admin_import_jobs_csv()
+            elif method == "POST" and path == "/api/admin/jobs/sync-tencent":
+                self.handle_admin_sync_tencent_jobs()
             elif method == "DELETE" and path.startswith("/api/admin/jobs/"):
                 self.handle_admin_delete_job(path)
             elif method == "POST" and path == "/api/plugin/tokens":
@@ -1570,9 +2242,83 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"resume": parsed, "rawText": raw_text, "message": message})
 
     def handle_jobs(self) -> None:
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+
+        def first_param(name: str, default: str = "") -> str:
+            return clean_text((query.get(name) or [default])[0])
+
+        try:
+            limit = int(first_param("limit", "120") or 120)
+            offset = int(first_param("offset", "0") or 0)
+        except ValueError:
+            self.send_json(400, {"error": "invalid_pagination"})
+            return
+        limit = max(1, min(limit, 300))
+        offset = max(0, offset)
+
+        clauses = []
+        values = []
+        batch = first_param("batch")
+        city = first_param("city")
+        company_type = first_param("companyType")
+        keyword = first_param("q")
+        sort_mode = first_param("sort", "match")
+        if batch and batch != "all":
+            clauses.append("batch = ?")
+            values.append(batch)
+        if city and city != "all":
+            clauses.append("city LIKE ?")
+            values.append(f"%{city}%")
+        if company_type and company_type != "all":
+            clauses.append("company_type = ?")
+            values.append(company_type)
+        if keyword:
+            like = f"%{keyword}%"
+            clauses.append(
+                "(company LIKE ? OR title LIKE ? OR city LIKE ? OR category LIKE ? OR company_type LIKE ? OR batch LIKE ? OR description LIKE ? OR requirements LIKE ?)"
+            )
+            values.extend([like, like, like, like, like, like, like, like])
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        update_date_expr = (
+            "CASE WHEN description LIKE '更新：____-__-__%' "
+            "THEN substr(description, 4, 10) "
+            "ELSE strftime('%Y-%m-%d', updated_at, 'unixepoch', 'localtime') END"
+        )
+        if sort_mode == "updated":
+            order_sql = f"{update_date_expr} DESC, updated_at DESC, company ASC"
+        else:
+            order_sql = """
+                    CASE WHEN deadline LIKE '____-__-__' THEN 0 ELSE 1 END,
+                    deadline ASC,
+                    updated_at DESC,
+                    company ASC
+                """
+
         with connect_db() as conn:
-            rows = conn.execute("SELECT * FROM jobs ORDER BY deadline ASC").fetchall()
-        self.send_json(200, {"jobs": [row_to_job(row) for row in rows]})
+            total = conn.execute(f"SELECT COUNT(*) AS count FROM jobs {where_sql}", values).fetchone()["count"]
+            rows = conn.execute(
+                f"""
+                SELECT * FROM jobs
+                {where_sql}
+                ORDER BY {order_sql}
+                LIMIT ? OFFSET ?
+                """,
+                values + [limit, offset],
+            ).fetchall()
+        self.send_json(
+            200,
+            {
+                "jobs": [row_to_job(row) for row in rows],
+                "meta": {
+                    "total": total,
+                    "limit": limit,
+                    "offset": offset,
+                    "returned": len(rows),
+                    "hasMore": offset + len(rows) < total,
+                    "sort": sort_mode,
+                },
+            },
+        )
 
     def handle_get_applications(self) -> None:
         user = self.require_user()
@@ -1581,7 +2327,8 @@ class AppHandler(BaseHTTPRequestHandler):
         with connect_db() as conn:
             rows = conn.execute(
                 """
-                SELECT applications.*, jobs.company, jobs.title, jobs.city, jobs.deadline, jobs.category, jobs.company_type, jobs.source_url
+                SELECT applications.*, jobs.company, jobs.title, jobs.city, jobs.deadline, jobs.category,
+                       jobs.company_type, jobs.batch, jobs.source, jobs.source_url
                 FROM applications
                 JOIN jobs ON jobs.id = applications.job_id
                 WHERE applications.user_id = ?
@@ -1606,6 +2353,8 @@ class AppHandler(BaseHTTPRequestHandler):
                         "deadline": row["deadline"],
                         "category": row["category"],
                         "companyType": row["company_type"],
+                        "batch": row["batch"],
+                        "source": row["source"],
                         "sourceUrl": row["source_url"],
                     },
                 }
@@ -1852,6 +2601,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 "jobsByCity": distribution(conn, "city"),
                 "jobsByType": distribution(conn, "company_type"),
                 "jobsByCategory": distribution(conn, "category"),
+                "jobsByBatch": distribution(conn, "batch"),
                 "applicationsByStatus": [
                     {
                         "label": STATUS_LABELS.get(row["status"], row["status"]),
@@ -1901,6 +2651,47 @@ class AppHandler(BaseHTTPRequestHandler):
                 except ValueError as exc:
                     errors.append({"row": index, "error": str(exc)})
         self.send_json(200, {"ok": True, "imported": imported, "errors": errors})
+
+    def handle_admin_sync_tencent_jobs(self) -> None:
+        user = self.require_admin()
+        if not user:
+            return
+        body = self.read_json()
+        action = (body.get("action") or "preview").strip()
+        result = collect_tencent_jobs(
+            body.get("startDate") or DEFAULT_SYNC_START_DATE,
+            body.get("endDate") or DEFAULT_SYNC_END_DATE,
+            body.get("minDeadline") or DEFAULT_MIN_DEADLINE_DATE,
+        )
+        jobs = result["jobs"]
+        imported = 0
+        if action == "import":
+            with connect_db() as conn:
+                conn.execute("DELETE FROM jobs WHERE source_url LIKE 'https://careers.example.com/%'")
+                for job in jobs:
+                    upsert_job(conn, job)
+                    imported += 1
+        sample = [
+            {
+                "company": job["company"],
+                "batch": job["batch"],
+                "city": job["city"],
+                "companyType": job["companyType"],
+                "deadline": job["deadline"],
+                "sourceUrl": job["sourceUrl"],
+            }
+            for job in jobs[:8]
+        ]
+        self.send_json(
+            200,
+            {
+                "ok": True,
+                "action": action,
+                "imported": imported,
+                "summary": result["summary"],
+                "sample": sample,
+            },
+        )
 
     def handle_admin_delete_job(self, path: str) -> None:
         user = self.require_admin()

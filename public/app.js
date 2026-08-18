@@ -8,13 +8,18 @@ const App = {
     applications: [],
     interviews: [],
     adminStats: null,
+    jobsMeta: { total: 0, limit: 120, offset: 0, returned: 0, hasMore: false },
     query: "",
     category: "all",
     city: "all",
     companyType: "all",
+    batch: "27届秋招",
+    jobSort: "match",
+    selectedCompanyKey: "",
     systemStatus: null,
     pluginToken: "",
     importResult: null,
+    syncResult: null,
     pendingParse: null,
     parseProgress: null,
     interview: null,
@@ -25,6 +30,12 @@ const App = {
   },
   parseTimer: null,
   toastTimer: null,
+  jobSearchTimer: null,
+  jobRequestId: 0,
+  composingQuery: false,
+  matchCache: new Map(),
+  matchContext: null,
+  matchContextSignature: "",
 
   async init() {
     try {
@@ -53,8 +64,7 @@ const App = {
   async loadData() {
     const status = await this.api("/api/system/status");
     this.state.systemStatus = status;
-    const jobs = await this.api("/api/jobs");
-    this.state.jobs = jobs.jobs;
+    await this.loadJobs(true);
 
     if (status.admin) {
       const stats = await this.api("/api/admin/stats");
@@ -79,6 +89,53 @@ const App = {
     this.state.applications = applications.applications;
     this.state.interviews = interviews.interviews;
     this.state.adminStats = null;
+  },
+
+  async loadJobs(reset = true) {
+    const requestId = ++this.jobRequestId;
+    const offset = reset ? 0 : this.state.jobs.length;
+    const params = new URLSearchParams({
+      limit: "120",
+      offset: String(offset),
+      batch: this.state.batch,
+      sort: this.state.jobSort,
+    });
+    if (this.state.city !== "all") params.set("city", this.state.city);
+    if (this.state.companyType !== "all") params.set("companyType", this.state.companyType);
+    if (this.state.query.trim()) params.set("q", this.state.query.trim());
+    const data = await this.api(`/api/jobs?${params.toString()}`);
+    if (requestId !== this.jobRequestId) return false;
+    this.state.jobs = reset ? data.jobs : [...this.state.jobs, ...data.jobs];
+    this.state.jobsMeta = data.meta || {
+      total: this.state.jobs.length,
+      limit: 120,
+      offset,
+      returned: data.jobs.length,
+      hasMore: false,
+    };
+    return true;
+  },
+
+  async reloadJobs() {
+    try {
+      if (await this.loadJobs(true)) {
+        this.render();
+      }
+    } catch (error) {
+      this.setError(`岗位加载失败：${error.message}`);
+      this.render();
+    }
+  },
+
+  async loadMoreJobs() {
+    try {
+      if (await this.loadJobs(false)) {
+        this.render();
+      }
+    } catch (error) {
+      this.setError(`加载更多失败：${error.message}`);
+      this.render();
+    }
   },
 
   escape(value) {
@@ -174,6 +231,7 @@ const App = {
   },
 
   nav(view) {
+    if (this.state.view === view) return;
     this.state.view = view;
     this.state.notice = "";
     this.state.error = "";
@@ -181,10 +239,12 @@ const App = {
   },
 
   render() {
+    const active = this.captureActiveElement();
     if (!this.state.user) {
       this.renderAuth();
       return;
     }
+    this.prepareMatchContext();
     const isAdmin = Boolean(this.state.systemStatus?.admin);
     const navItems = isAdmin
       ? [
@@ -233,6 +293,39 @@ const App = {
       ${this.renderToast()}
       ${this.renderParseModal()}
     `;
+    this.restoreActiveElement(active);
+  },
+
+  captureActiveElement() {
+    const element = document.activeElement;
+    if (!element || !element.id || !this.appEl()?.contains(element)) {
+      return null;
+    }
+    const snapshot = { id: element.id };
+    try {
+      snapshot.start = element.selectionStart;
+      snapshot.end = element.selectionEnd;
+    } catch {
+      snapshot.start = null;
+      snapshot.end = null;
+    }
+    return snapshot;
+  },
+
+  restoreActiveElement(snapshot) {
+    if (!snapshot?.id) return;
+    requestAnimationFrame(() => {
+      const element = document.getElementById(snapshot.id);
+      if (!element) return;
+      element.focus({ preventScroll: true });
+      if (snapshot.start !== null && typeof element.setSelectionRange === "function") {
+        try {
+          element.setSelectionRange(snapshot.start, snapshot.end ?? snapshot.start);
+        } catch {
+          // Some controls, such as date inputs, do not support text ranges.
+        }
+      }
+    });
   },
 
   setNotice(message) {
@@ -293,6 +386,17 @@ const App = {
     return (views[this.state.view] || views.dashboard)();
   },
 
+  prepareMatchContext() {
+    const tags = this.resumeTags();
+    const resumeText = this.resumeMatchText();
+    const signature = `${resumeText.length}:${resumeText.slice(0, 160)}:${tags.map((tag) => `${tag.name}:${tag.confidence}`).join("|")}`;
+    if (signature !== this.matchContextSignature) {
+      this.matchCache = new Map();
+      this.matchContextSignature = signature;
+    }
+    this.matchContext = { tags, resumeText };
+  },
+
   resumeTags() {
     return this.normalizeAbilityTags(this.state.resume?.abilityTags || []);
   },
@@ -319,12 +423,125 @@ const App = {
     return this.resumeTags().map((tag) => tag.name);
   },
 
+  flattenText(value) {
+    if (value == null) return [];
+    if (Array.isArray(value)) return value.flatMap((item) => this.flattenText(item));
+    if (typeof value === "object") return Object.values(value).flatMap((item) => this.flattenText(item));
+    return [String(value)];
+  },
+
+  normalizeMatchText(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/\s+/g, "");
+  },
+
+  resumeMatchText() {
+    const resume = this.normalizeResume(this.state.resume);
+    return this.normalizeMatchText([
+      this.state.rawText || "",
+      resume.summary || "",
+      resume.selfDescription || "",
+      ...(resume.gaps || []),
+      ...this.flattenText(resume.profile),
+      ...this.flattenText(resume.education),
+      ...this.flattenText(resume.internships),
+      ...this.flattenText(resume.projects),
+      ...this.flattenText(resume.awards),
+      ...this.flattenText(resume.portfolios),
+      ...this.resumeTags().map((tag) => tag.name),
+    ].join(" "));
+  },
+
+  matchVariants(value) {
+    const term = this.normalizeMatchText(value);
+    const aliases = {
+      python: ["python"],
+      java: ["java"],
+      javascript: ["javascript", "js", "前端", "web"],
+      typescript: ["typescript", "ts", "前端", "web"],
+      sql: ["sql", "mysql", "postgresql", "数据库", "数据分析"],
+      数据分析: ["数据分析", "数据", "分析", "可视化", "sql", "excel", "spss"],
+      后端开发: ["后端", "服务端", "api", "接口", "数据库", "python", "java"],
+      前端开发: ["前端", "web", "javascript", "typescript", "react", "vue", "小程序", "移动端"],
+      移动端开发: ["移动端", "app", "ios", "android", "小程序", "xcode", "swift", "flutter", "前端"],
+      ai工具应用: ["ai", "人工智能", "大模型", "llm", "aigc", "prompt", "提示词", "智能体", "claude", "qwen", "豆包"],
+      机器学习: ["机器学习", "深度学习", "ai", "算法", "模型"],
+      产品设计: ["产品", "产品设计", "需求", "prd", "原型", "用户调研", "竞品", "产品思维"],
+      项目管理: ["项目管理", "项目推进", "协作", "沟通", "产品思维"],
+      项目管理与产品思维: ["项目管理", "项目推进", "产品", "需求", "prd", "产品思维", "协作"],
+      技术: ["技术", "开发", "工程", "python", "java", "前端", "后端", "移动端", "ai", "算法"],
+      uiux设计: ["ui", "ux", "uiux", "交互", "视觉", "figma", "原型", "用户体验", "设计"],
+      "ui/ux": ["ui", "ux", "uiux", "交互", "视觉", "figma", "原型", "用户体验", "设计"],
+      "ui/ux设计": ["ui", "ux", "uiux", "交互", "视觉", "figma", "原型", "用户体验", "设计"],
+      新媒体运营: ["新媒体", "运营", "内容运营", "视频", "剪辑", "活动", "社群"],
+      视频剪辑与新媒体运营: ["新媒体", "运营", "内容运营", "视频", "剪辑", "活动", "社群"],
+      运营: ["运营", "内容运营", "新媒体", "活动", "社群", "增长", "用户"],
+      设计: ["设计", "ui", "ux", "figma", "原型", "视觉", "交互"],
+      有机合成实验: ["有机合成", "实验", "化学", "材料化学", "高分子", "研发"],
+      化学: ["化学", "材料化学", "高分子", "有机合成", "实验", "研发"],
+      供应链: ["供应链", "采购", "物流", "计划", "交付"],
+      财务分析: ["财务", "金融", "会计", "分析", "报表"],
+      市场营销: ["市场", "营销", "品牌", "增长", "用户"],
+    };
+    const values = new Set([term]);
+    Object.entries(aliases).forEach(([key, variants]) => {
+      const normalizedKey = this.normalizeMatchText(key);
+      const normalizedVariants = variants.map((item) => this.normalizeMatchText(item));
+      if (term === normalizedKey || normalizedVariants.includes(term)) {
+        normalizedVariants.forEach((item) => values.add(item));
+        values.add(normalizedKey);
+      }
+    });
+    return [...values].filter(Boolean);
+  },
+
+  variantsOverlap(left, right) {
+    const leftVariants = this.matchVariants(left);
+    const rightVariants = this.matchVariants(right);
+    return leftVariants.some((a) =>
+      rightVariants.some((b) => a === b || (a.length >= 2 && b.includes(a)) || (b.length >= 2 && a.includes(b)))
+    );
+  },
+
+  requirementMatchScore(requirement, resumeText, tags) {
+    let best = 0;
+    tags.forEach((tag) => {
+      if (this.variantsOverlap(tag.name, requirement)) {
+        best = Math.max(best, tag.confidence || 0.72);
+      }
+    });
+    const variants = this.matchVariants(requirement);
+    if (variants.some((item) => item && resumeText.includes(item))) {
+      best = Math.max(best, 0.68);
+    }
+    return Math.min(0.98, best);
+  },
+
   matchJob(job) {
-    const tags = new Set(this.tagNames());
-    const hits = job.requirements.filter((item) => tags.has(item));
-    const score = Math.min(96, 42 + Math.round((hits.length / Math.max(job.requirements.length, 1)) * 52));
-    const missing = job.requirements.filter((item) => !tags.has(item));
-    return {
+    const cacheKey = job?.id || `${job?.company || ""}-${job?.sourceUrl || ""}`;
+    if (cacheKey && this.matchCache?.has(cacheKey)) {
+      return this.matchCache.get(cacheKey);
+    }
+    const requirements = job.requirements || [];
+    const tags = this.matchContext?.tags || this.resumeTags();
+    const resumeText = this.matchContext?.resumeText || this.resumeMatchText();
+    const hasResumeSignal = tags.length > 0 || resumeText.length > 20;
+    const scored = requirements.map((item) => ({
+      item,
+      score: this.requirementMatchScore(item, resumeText, tags),
+    }));
+    const hits = scored.filter((item) => item.score >= 0.5).map((item) => item.item);
+    const missing = scored.filter((item) => item.score < 0.42).map((item) => item.item);
+    const average = scored.length
+      ? scored.reduce((sum, item) => sum + item.score, 0) / scored.length
+      : 0;
+    const categoryBonus = this.matchVariants(job.category).some((item) => resumeText.includes(item)) ? 0.08 : 0;
+    const titleBonus = this.matchVariants(job.title).some((item) => resumeText.includes(item)) ? 0.05 : 0;
+    const score = hasResumeSignal
+      ? Math.max(36, Math.min(96, Math.round(38 + (average + categoryBonus + titleBonus) * 58 + Math.min(hits.length, 4) * 2)))
+      : 42;
+    const result = {
       score,
       hits,
       missing,
@@ -332,6 +549,8 @@ const App = {
         ? `匹配 ${hits.join("、")}。`
         : "简历能力标签还不够明确，建议先完善项目和技能。",
     };
+    if (cacheKey) this.matchCache.set(cacheKey, result);
+    return result;
   },
 
   completion() {
@@ -348,6 +567,7 @@ const App = {
     const apps = this.state.applications;
     const recommended = [...this.state.jobs].sort((a, b) => this.matchJob(b).score - this.matchJob(a).score).slice(0, 3);
     const dueSoon = this.state.jobs.filter((job) => new Date(job.deadline) - new Date() < 1000 * 60 * 60 * 24 * 14).slice(0, 4);
+    const jobTotal = this.state.jobsMeta?.total || this.state.jobs.length;
     return `
       <section class="section-title">
         <div>
@@ -358,7 +578,7 @@ const App = {
       </section>
       <section class="grid cols-4">
         <div class="metric"><span>简历完整度</span><strong>${completion}%</strong><small>结构化字段 + 能力标签</small></div>
-        <div class="metric"><span>可匹配岗位</span><strong>${this.state.jobs.length}</strong><small>当前种子岗位库</small></div>
+        <div class="metric"><span>可匹配岗位</span><strong>${jobTotal}</strong><small>真实岗位库</small></div>
         <div class="metric"><span>投递记录</span><strong>${apps.length}</strong><small>收藏到 Offer 全流程</small></div>
         <div class="metric"><span>面试报告</span><strong>${this.state.interviews.length}</strong><small>只存报告和总结</small></div>
       </section>
@@ -1084,78 +1304,284 @@ const App = {
   filteredJobs() {
     const query = this.state.query.trim().toLowerCase();
     return this.state.jobs.filter((job) => {
-      const inCategory = this.state.category === "all" || job.category === this.state.category;
       const inCity = this.state.city === "all" || job.city === this.state.city;
       const inCompanyType = this.state.companyType === "all" || job.companyType === this.state.companyType;
-      const text = `${job.company} ${job.title} ${job.city} ${job.category} ${job.companyType || ""} ${job.description} ${job.requirements.join(" ")}`.toLowerCase();
-      return inCategory && inCity && inCompanyType && (!query || text.includes(query));
+      const inBatch = job.batch === this.state.batch;
+      const text = `${job.company} ${job.title} ${job.city} ${job.category} ${job.companyType || ""} ${job.batch || ""} ${job.description} ${job.requirements.join(" ")}`.toLowerCase();
+      return inCity && inCompanyType && inBatch && (!query || text.includes(query));
     });
   },
 
+  sortJobs(jobs) {
+    const items = [...jobs];
+    if (this.state.jobSort === "updated") {
+      return items.sort((a, b) =>
+        this.jobUpdateDate(b).localeCompare(this.jobUpdateDate(a)) ||
+        this.matchJob(b).score - this.matchJob(a).score ||
+        a.company.localeCompare(b.company, "zh-CN")
+      );
+    }
+    return items.sort((a, b) =>
+      this.matchJob(b).score - this.matchJob(a).score ||
+      this.jobUpdateDate(b).localeCompare(this.jobUpdateDate(a)) ||
+      a.company.localeCompare(b.company, "zh-CN")
+    );
+  },
+
   renderJobs() {
-    const categories = ["all", ...new Set(this.state.jobs.map((job) => job.category))];
     const cities = ["all", ...new Set(this.state.jobs.map((job) => job.city))];
     const companyTypes = ["all", ...new Set(this.state.jobs.map((job) => job.companyType || "未分类"))];
-    const jobs = this.filteredJobs().sort((a, b) => this.matchJob(b).score - this.matchJob(a).score);
+    const jobs = this.sortJobs(this.filteredJobs());
+    const companyGroups = this.companyGroups(jobs);
+    const total = this.state.jobsMeta?.total ?? jobs.length;
+    const selectedCompany = this.state.selectedCompanyKey
+      ? companyGroups.find((group) => group.key === this.state.selectedCompanyKey)
+      : null;
     return `
       <section class="section-title">
         <div>
           <h2>岗位匹配</h2>
-          <p>按能力匹配、城市、岗位方向和企业类型筛选，去投递会打开官方校招链接。</p>
+          <p>按能力匹配、城市、批次和企业类型筛选，已加载 ${this.state.jobs.length}/${total} 条，去投递会打开官方校招链接。</p>
+          <div class="batch-tabs">
+            ${["27届秋招", "实习", "26届春招"].map((item) => `
+              <button class="pill-button ${this.state.batch === item ? "active" : ""}" onclick="App.setBatch('${item}')">
+                ${item}
+              </button>
+            `).join("")}
+          </div>
         </div>
       </section>
       <section class="panel">
         <div class="toolbar">
-          <input value="${this.escape(this.state.query)}" placeholder="搜索公司、岗位、城市、能力、企业类型" oninput="App.setQuery(this.value)" />
+          <input id="job-search" value="${this.escape(this.state.query)}" placeholder="搜索公司、岗位、城市、能力、企业类型" oncompositionstart="App.startQueryComposition()" oncompositionend="App.endQueryComposition(this.value)" oninput="App.setQuery(this.value)" />
           <select onchange="App.setCity(this.value)">
             ${cities.map((item) => `<option value="${this.escape(item)}" ${this.state.city === item ? "selected" : ""}>${item === "all" ? "全部城市" : this.escape(item)}</option>`).join("")}
-          </select>
-          <select onchange="App.setCategory(this.value)">
-            ${categories.map((item) => `<option value="${this.escape(item)}" ${this.state.category === item ? "selected" : ""}>${item === "all" ? "全部方向" : this.escape(item)}</option>`).join("")}
           </select>
           <select onchange="App.setCompanyType(this.value)">
             ${companyTypes.map((item) => `<option value="${this.escape(item)}" ${this.state.companyType === item ? "selected" : ""}>${item === "all" ? "全部类型" : this.escape(item)}</option>`).join("")}
           </select>
+          <select onchange="App.setJobSort(this.value)">
+            <option value="match" ${this.state.jobSort === "match" ? "selected" : ""}>按匹配度</option>
+            <option value="updated" ${this.state.jobSort === "updated" ? "selected" : ""}>按更新时间</option>
+          </select>
         </div>
-        <div class="grid cols-2">${jobs.length ? jobs.map((job) => this.jobCard(job)).join("") : `<div class="empty">没有匹配的岗位，试着放宽城市或企业类型。</div>`}</div>
+        ${selectedCompany ? this.renderCompanyDetail(selectedCompany) : `${this.renderCompanyGroups(companyGroups)}${this.renderJobsPager()}`}
       </section>
     `;
   },
 
+  renderJobsPager() {
+    const meta = this.state.jobsMeta || {};
+    const total = meta.total ?? this.state.jobs.length;
+    if (!meta.hasMore) return "";
+    return `
+      <div class="pager-row">
+        <span>已加载 ${this.state.jobs.length}/${total} 条</span>
+        <button class="btn small" onclick="App.loadMoreJobs()">加载更多</button>
+      </div>
+    `;
+  },
+
+  renderJobGrid(jobs) {
+    return `<div class="grid cols-2">${jobs.length ? jobs.map((job) => this.jobCard(job)).join("") : `<div class="empty">没有匹配的岗位，试着放宽城市或企业类型。</div>`}</div>`;
+  },
+
+  jobUpdateDate(job) {
+    const sourceDate = String(job.description || "").match(/(?:^|\n)更新[：:]\s*(\d{4}-\d{2}-\d{2})/);
+    if (sourceDate) return sourceDate[1];
+    return job.updatedAt ? String(job.updatedAt).slice(0, 10) : "";
+  },
+
+  latestJobUpdateDate(jobs) {
+    return jobs
+      .map((job) => this.jobUpdateDate(job))
+      .filter(Boolean)
+      .sort()
+      .pop() || "";
+  },
+
+  visibleJobDescription(job) {
+    const text = String(job.description || "");
+    const lines = text
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter((line) => line && !/^(来源|更新|批次|公告)[：:]/.test(line));
+    return lines.join("\n") || job.category || "";
+  },
+
+  companyGroupKey(company) {
+    return encodeURIComponent(company || "未命名公司");
+  },
+
+  companyGroups(jobs) {
+    const groups = new Map();
+    jobs.forEach((job) => {
+      const company = job.company || "未命名公司";
+      const key = this.companyGroupKey(company);
+      if (!groups.has(key)) {
+        groups.set(key, { key, company, jobs: [] });
+      }
+      groups.get(key).jobs.push(job);
+    });
+    return [...groups.values()]
+      .map((group) => {
+        const scoredJobs = group.jobs
+          .map((job) => ({ job, match: this.matchJob(job) }))
+          .sort((a, b) => b.match.score - a.match.score);
+        return {
+          ...group,
+          jobs: scoredJobs.map((item) => item.job),
+          bestScore: scoredJobs[0]?.match.score || 0,
+          bestMatch: scoredJobs[0]?.match || null,
+          latestUpdate: this.latestJobUpdateDate(group.jobs),
+        };
+      })
+      .sort((a, b) => {
+        if (this.state.jobSort === "updated") {
+          return b.latestUpdate.localeCompare(a.latestUpdate) || b.bestScore - a.bestScore || a.company.localeCompare(b.company, "zh-CN");
+        }
+        return b.bestScore - a.bestScore || b.latestUpdate.localeCompare(a.latestUpdate) || a.company.localeCompare(b.company, "zh-CN");
+      });
+  },
+
+  renderCompanyGroups(groups) {
+    if (!groups.length) {
+      return `<div class="empty">没有匹配的公司，试着放宽城市或企业类型。</div>`;
+    }
+    return `<div class="grid cols-2">${groups.map((group) => this.companyCard(group)).join("")}</div>`;
+  },
+
+  companyCard(group) {
+    const jobs = group.jobs;
+    const cities = [...new Set(jobs.map((job) => job.city).filter(Boolean))];
+    const categories = [...new Set(jobs.map((job) => job.category).filter(Boolean))];
+    const companyTypes = [...new Set(jobs.map((job) => job.companyType || "未分类"))];
+    const deadlines = jobs.map((job) => job.deadline).filter(Boolean).sort();
+    const updateDate = this.latestJobUpdateDate(jobs);
+    const addedCount = jobs.filter((job) => this.state.applications.some((item) => item.jobId === job.id)).length;
+    const allRequirements = [...new Set(jobs.flatMap((job) => job.requirements || []))].slice(0, 8);
+    return `
+      <article class="job-card company-card" role="button" tabindex="0" onclick="App.viewCompanyJobs('${group.key}')" onkeydown="App.openCompanyFromKey(event, '${group.key}')">
+        <div class="job-head">
+          <div>
+            <h3 class="job-title">${this.escape(group.company)}</h3>
+            <div class="job-meta">${this.escape(cities.slice(0, 4).join(" / ") || "城市待确认")} · ${this.escape(companyTypes.join(" / "))}${updateDate ? ` · 更新 ${this.escape(updateDate)}` : ""}</div>
+          </div>
+          <div class="match">${group.bestScore}%</div>
+        </div>
+        <p class="muted" style="margin: 0;">覆盖 ${this.escape(categories.join("、") || "多个")} 方向${deadlines[0] ? ` · 最近截止 ${this.escape(deadlines[0])}` : ""}</p>
+        <div class="chips">
+          ${allRequirements.map((req) => `<span class="chip ${group.bestMatch?.hits?.includes(req) ? "green" : "amber"}">${this.escape(req)}</span>`).join("")}
+        </div>
+        ${addedCount ? `<div class="muted">已加入投递看板：${addedCount} 个岗位</div>` : ""}
+        <div class="toolbar">
+          <button class="btn small primary" onclick="event.stopPropagation(); App.viewCompanyJobs('${group.key}')">查看详情</button>
+        </div>
+      </article>
+    `;
+  },
+
+  renderCompanyDetail(group) {
+    const cities = [...new Set(group.jobs.map((job) => job.city).filter(Boolean))];
+    const categories = [...new Set(group.jobs.map((job) => job.category).filter(Boolean))];
+    const updateDate = this.latestJobUpdateDate(group.jobs);
+    return `
+      <div class="company-detail-head">
+        <div>
+          <button class="btn small" onclick="App.closeCompanyJobs()">返回公司列表</button>
+          <h3>${this.escape(group.company)}</h3>
+          <p class="muted">${this.escape(cities.join(" / ") || "城市待确认")} · ${this.escape(categories.join(" / ") || "方向待确认")}${updateDate ? ` · 更新 ${this.escape(updateDate)}` : ""}</p>
+        </div>
+      </div>
+      ${this.renderJobGrid(group.jobs)}
+    `;
+  },
+
+  setBatch(value) {
+    this.state.batch = value;
+    this.state.selectedCompanyKey = "";
+    this.reloadJobs();
+  },
+
+  setJobSort(value) {
+    this.state.jobSort = value;
+    this.state.selectedCompanyKey = "";
+    this.reloadJobs();
+  },
+
+  viewCompanyJobs(key) {
+    this.state.selectedCompanyKey = key;
+    this.render();
+  },
+
+  openCompanyFromKey(event, key) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      this.viewCompanyJobs(key);
+    }
+  },
+
+  closeCompanyJobs() {
+    this.state.selectedCompanyKey = "";
+    this.render();
+  },
+
   setQuery(value) {
     this.state.query = value;
-    this.render();
+    this.state.selectedCompanyKey = "";
+    if (this.composingQuery) return;
+    if (this.jobSearchTimer) clearTimeout(this.jobSearchTimer);
+    this.jobSearchTimer = setTimeout(() => this.reloadJobs(), 480);
+  },
+
+  startQueryComposition() {
+    this.composingQuery = true;
+    if (this.jobSearchTimer) clearTimeout(this.jobSearchTimer);
+  },
+
+  endQueryComposition(value) {
+    this.composingQuery = false;
+    this.setQuery(value);
   },
 
   setCategory(value) {
     this.state.category = value;
+    this.state.selectedCompanyKey = "";
     this.render();
   },
 
   setCity(value) {
     this.state.city = value;
-    this.render();
+    this.state.selectedCompanyKey = "";
+    this.reloadJobs();
   },
 
   setCompanyType(value) {
     this.state.companyType = value;
-    this.render();
+    this.state.selectedCompanyKey = "";
+    this.reloadJobs();
   },
 
   jobCard(job, compact = false) {
     const match = this.matchJob(job);
     const app = this.state.applications.find((item) => item.jobId === job.id);
     const appStatus = app ? `已加入：${app.statusLabel || "投递看板"}` : "";
+    const displayTitle = job.title && job.title !== "招聘岗位合集"
+      ? `${job.company} · ${job.title}`
+      : job.company;
+    const batchText = job.batch ? `${job.batch} · ` : "";
+    const updateDate = this.jobUpdateDate(job);
+    const description = this.visibleJobDescription(job);
     return `
       <article class="job-card">
         <div class="job-head">
           <div>
-            <h3 class="job-title">${this.escape(job.company)} · ${this.escape(job.title)}</h3>
-            <div class="job-meta">${this.escape(job.city)} · ${this.escape(job.category)} · ${this.escape(job.companyType || "未分类")} · 截止 ${this.escape(job.deadline)}</div>
+            <h3 class="job-title">${this.escape(displayTitle)}</h3>
+            <div class="job-meta">${this.escape(job.city)} · ${this.escape(batchText)}${this.escape(job.companyType || "未分类")}${updateDate ? ` · 更新 ${this.escape(updateDate)}` : ""} · 截止 ${this.escape(job.deadline)}</div>
           </div>
           <div class="match">${match.score}%</div>
         </div>
-        <p class="muted" style="margin: 0;">${this.escape(job.description)}</p>
+        <p class="muted" style="margin: 0;">${this.escape(description)}</p>
         <div class="chips">
           ${job.requirements.map((req) => `<span class="chip ${match.hits.includes(req) ? "green" : "amber"}">${this.escape(req)}</span>`).join("")}
         </div>
@@ -1230,7 +1656,7 @@ const App = {
     return `
       <div class="application-card">
         <strong>${this.escape(item.job.company)} · ${this.escape(item.job.title)}</strong>
-        <p>${this.escape(item.job.city)} · ${this.escape(item.job.category)} · ${this.escape(item.job.companyType || "未分类")} · 截止 ${this.escape(item.job.deadline)}</p>
+        <p>${this.escape(item.job.city)} · ${this.escape(item.job.batch || "未标注批次")} · ${this.escape(item.job.companyType || "未分类")} · 截止 ${this.escape(item.job.deadline)}</p>
         <select onchange="App.updateApplication(${item.id}, this.value)">
           ${statuses.map(([status, label]) => `<option value="${status}" ${item.status === status ? "selected" : ""}>${label}</option>`).join("")}
         </select>
@@ -1700,7 +2126,7 @@ const App = {
       <div class="grid cols-3" style="margin-top: 14px;">
         ${this.renderAdminDistribution("城市分布", stats.jobsByCity)}
         ${this.renderAdminDistribution("企业类型", stats.jobsByType)}
-        ${this.renderAdminDistribution("岗位方向", stats.jobsByCategory)}
+        ${this.renderAdminDistribution("招聘批次", stats.jobsByBatch)}
       </div>
       <div class="split" style="margin-top: 14px;">
         <section class="panel">
@@ -1746,9 +2172,9 @@ const App = {
   },
 
   renderAdmin() {
-    const csvSample = `company,title,city,category,companyType,deadline,sourceUrl,description,requirements
-中国移动,产品经理校招,北京,产品,央企,2026-09-30,https://job.10086.cn,负责产品规划和需求推进,产品设计、数据分析、沟通协作
-某某银行,金融科技管培生,上海,技术,国企,2026-10-15,https://career.example-bank.com,参与金融科技项目和数据平台建设,Python、SQL、数据分析`;
+    const csvSample = `company,title,city,category,companyType,batch,deadline,sourceUrl,description,requirements
+中国移动,招聘岗位合集,北京,产品,央企,27届秋招,2026-09-30,https://job.10086.cn,负责产品规划和需求推进,产品设计、数据分析、沟通协作
+某某银行,招聘岗位合集,上海,技术,国企,27届秋招,2026-10-15,https://career.example-bank.com,参与金融科技项目和数据平台建设,Python、SQL、数据分析`;
     return `
       <section class="section-title">
         <div>
@@ -1765,6 +2191,7 @@ const App = {
             ${this.textField("admin-city", "城市", "")}
             ${this.textField("admin-category", "岗位方向", "")}
             ${this.selectField("admin-companyType", "企业类型", "", ["", "央企", "国企", "民企", "外企", "事业单位", "政府机关", "其他"])}
+            ${this.selectField("admin-batch", "招聘批次", "27届秋招", ["27届秋招", "实习", "26届春招"])}
             ${this.textField("admin-deadline", "截止日期", "", "date")}
             ${this.textField("admin-sourceUrl", "官方校招/网申链接", "")}
             ${this.textareaField("admin-requirements", "岗位要求关键词", "")}
@@ -1786,12 +2213,49 @@ const App = {
         </aside>
       </div>
       <section class="panel" style="margin-top: 14px;">
-        <h2 style="margin-top: 0;">当前岗位库</h2>
-        <table>
-          <thead><tr><th>公司</th><th>岗位</th><th>城市</th><th>类型</th><th>截止</th><th>链接</th><th>操作</th></tr></thead>
-          <tbody>${this.state.jobs.map((job) => `<tr><td>${this.escape(job.company)}</td><td>${this.escape(job.title)}</td><td>${this.escape(job.city)}</td><td>${this.escape(job.companyType || "未分类")}</td><td>${this.escape(job.deadline)}</td><td><a href="${this.escape(job.sourceUrl)}" target="_blank" rel="noopener noreferrer">打开</a></td><td><button class="btn small danger" onclick="App.deleteJob(${job.id})">删除</button></td></tr>`).join("")}</tbody>
-        </table>
+        <h2 style="margin-top: 0;">腾讯文档同步</h2>
+        <p class="muted">读取两张在线表格，按公司和校招链接合并；明确截止早于 2026-08-18 的数据会跳过。</p>
+        <div class="toolbar">
+          <label class="inline-field">开始日期<input id="sync-start" type="date" value="2026-07-01" /></label>
+          <label class="inline-field">结束日期<input id="sync-end" type="date" value="2026-08-18" /></label>
+          <label class="inline-field">最早截止<input id="sync-min-deadline" type="date" value="2026-08-18" /></label>
+          <button class="btn" onclick="App.syncTencentJobs('preview')">预览</button>
+          <button class="btn primary" onclick="App.syncTencentJobs('import')">导入真实数据</button>
+        </div>
+        ${this.renderSyncResult()}
       </section>
+      <section class="panel" style="margin-top: 14px;">
+        <h2 style="margin-top: 0;">当前岗位库</h2>
+        <p class="muted">当前批次已加载 ${this.state.jobs.length}/${this.state.jobsMeta?.total || this.state.jobs.length} 条。</p>
+        <table>
+          <thead><tr><th>公司</th><th>批次</th><th>城市</th><th>类型</th><th>截止</th><th>链接</th><th>操作</th></tr></thead>
+          <tbody>${this.state.jobs.map((job) => `<tr><td>${this.escape(job.company)}</td><td>${this.escape(job.batch || "未标注")}</td><td>${this.escape(job.city)}</td><td>${this.escape(job.companyType || "未分类")}</td><td>${this.escape(job.deadline)}</td><td><a href="${this.escape(job.sourceUrl)}" target="_blank" rel="noopener noreferrer">打开</a></td><td><button class="btn small danger" onclick="App.deleteJob(${job.id})">删除</button></td></tr>`).join("")}</tbody>
+        </table>
+        ${this.renderJobsPager()}
+      </section>
+    `;
+  },
+
+  renderSyncResult() {
+    const result = this.state.syncResult;
+    if (!result) return "";
+    const summary = result.summary || {};
+    const skipped = summary.skipped || {};
+    return `
+      <div class="notice">
+        ${result.action === "import" ? `已导入/更新 ${result.imported || 0} 条。` : "预览完成。"}
+        扫描 ${summary.scanned || 0} 行，符合规则 ${summary.matched || 0} 行，合并去重 ${summary.deduped || 0} 行，待写入 ${summary.ready || 0} 条。
+      </div>
+      <div class="grid cols-2">
+        <div class="mini-list">
+          <strong>跳过原因</strong>
+          ${Object.keys(skipped).length ? Object.entries(skipped).map(([key, count]) => `<span>${this.escape(key)}：${count}</span>`).join("") : `<span>无</span>`}
+        </div>
+        <div class="mini-list">
+          <strong>样本</strong>
+          ${(result.sample || []).slice(0, 6).map((item) => `<span>${this.escape(item.company)} · ${this.escape(item.batch)} · ${this.escape(item.city)}</span>`).join("") || `<span>无样本</span>`}
+        </div>
+      </div>
     `;
   },
 
@@ -1802,6 +2266,7 @@ const App = {
       city: this.getInput("admin-city"),
       category: this.getInput("admin-category"),
       companyType: this.getInput("admin-companyType"),
+      batch: this.getInput("admin-batch"),
       deadline: this.getInput("admin-deadline"),
       sourceUrl: this.getInput("admin-sourceUrl"),
       requirements: this.getInput("admin-requirements"),
@@ -1815,8 +2280,7 @@ const App = {
         method: "POST",
         body: JSON.stringify(this.collectAdminJob()),
       });
-      const jobs = await this.api("/api/jobs");
-      this.state.jobs = jobs.jobs;
+      await this.loadJobs(true);
       const stats = await this.api("/api/admin/stats");
       this.state.adminStats = stats.stats;
       this.setNotice("岗位已保存。");
@@ -1845,8 +2309,7 @@ const App = {
         method: "POST",
         body: JSON.stringify({ csv }),
       });
-      const jobs = await this.api("/api/jobs");
-      this.state.jobs = jobs.jobs;
+      await this.loadJobs(true);
       this.state.importResult = data;
       const stats = await this.api("/api/admin/stats");
       this.state.adminStats = stats.stats;
@@ -1858,14 +2321,39 @@ const App = {
     }
   },
 
+  async syncTencentJobs(action) {
+    try {
+      const payload = {
+        action,
+        startDate: document.querySelector("#sync-start")?.value || "2026-07-01",
+        endDate: document.querySelector("#sync-end")?.value || "2026-08-18",
+        minDeadline: document.querySelector("#sync-min-deadline")?.value || "2026-08-18",
+      };
+      const data = await this.api("/api/admin/jobs/sync-tencent", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      this.state.syncResult = data;
+      if (action === "import") {
+        await this.loadJobs(true);
+        const stats = await this.api("/api/admin/stats");
+        this.state.adminStats = stats.stats;
+      }
+      this.setNotice(action === "import" ? "腾讯文档数据已导入。" : "腾讯文档同步预览完成。");
+      this.render();
+    } catch (error) {
+      this.setError(`腾讯文档同步失败：${error.message}`);
+      this.render();
+    }
+  },
+
   async deleteJob(id) {
     if (!confirm("确认删除这个岗位？")) return;
     try {
       await this.api(`/api/admin/jobs/${id}`, {
         method: "DELETE",
       });
-      const jobs = await this.api("/api/jobs");
-      this.state.jobs = jobs.jobs;
+      await this.loadJobs(true);
       const stats = await this.api("/api/admin/stats");
       this.state.adminStats = stats.stats;
       this.setNotice("岗位已删除。");
