@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <strong>OfferOS 填表助手</strong>
+      </header>
+      <p>从主站同步结构化简历字段，扫描当前网申页后确认填充。</p>
+      <label class="field">
+        <span>主站地址</span>
+        <input id="server-base" placeholder="https://你的 OfferOS 域名" />
+      </label>
+      <label class="field">
+        <span>连接令牌</span>
+        <input id="plugin-token" placeholder="在主站插件页生成" />
+      </label>
+      <div class="actions">
+        <button id="sync">从主站同步</button>
+      </div>
+      <textarea id="profile"></textarea>
+      <div class="actions">
+        <button id="save">保存资料</button>
+        <button id="scan">扫描字段</button>
+        <button id="fill">确认填充</button>
+      </div>
+      <section id="result"></section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

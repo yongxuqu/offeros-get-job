@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "OfferOS 填表助手",
+  "version": "0.1.0",
+  "description": "识别常见网申字段，并用结构化简历字段辅助填充。",
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

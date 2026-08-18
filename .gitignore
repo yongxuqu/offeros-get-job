@@ -1,0 +1,7 @@
+data/*.db
+data/*.db-*
+data/uploads/
+backups/
+__pycache__/
+.env
+.DS_Store
