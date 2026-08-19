@@ -627,7 +627,7 @@ const App = {
             </div>
             <label class="btn primary">
               选择文件
-              <input type="file" id="resume-file" onchange="App.parseResumeFile(this)" accept=".pdf,.doc,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword" hidden />
+              <input type="file" id="resume-file" onchange="App.parseResumeFile(this)" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,image/png,image/jpeg" hidden />
             </label>
           </div>
           <div class="resume-block">
@@ -1037,7 +1037,7 @@ const App = {
           if (progress.complete) {
             this.updateParseProgress({
               phaseLabel: "解析中",
-              detail: "文件已上传，正在提取文本并结构化字段",
+              detail: "文件已上传，正在提取文本；扫描版会自动尝试 OCR",
               percent: null,
             });
             return;
@@ -1119,7 +1119,7 @@ const App = {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", path);
       xhr.withCredentials = true;
-      xhr.timeout = 120000;
+      xhr.timeout = 300000;
       xhr.setRequestHeader("Content-Type", "application/json");
       xhr.upload.onprogress = (event) => {
         if (!event.lengthComputable) return;
@@ -1143,7 +1143,7 @@ const App = {
         if (xhr.status >= 200 && xhr.status < 300) {
           resolve(data);
         } else {
-          reject(new Error(data.error || "request_failed"));
+          reject(new Error(data.error || `request_failed_${xhr.status || "unknown"}`));
         }
       };
       xhr.onerror = () => reject(new Error("network_error"));

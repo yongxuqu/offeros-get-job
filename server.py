@@ -78,7 +78,9 @@ STT_API_KEY = os.getenv("STT_API_KEY", "")
 STT_MODEL = os.getenv("STT_MODEL", "paraformer-v2")
 ADMIN_EMAILS = {item.strip().lower() for item in os.getenv("ADMIN_EMAILS", "").split(",") if item.strip()}
 MAX_RESUME_FILE_SIZE = 8 * 1024 * 1024
-MAX_JSON_BODY_SIZE = 12 * 1024 * 1024
+MAX_JSON_BODY_SIZE = 16 * 1024 * 1024
+OCR_TEXT_THRESHOLD = max(20, int(os.getenv("OCR_TEXT_THRESHOLD", "120") or 120))
+OCR_MAX_PAGES = max(1, min(4, int(os.getenv("OCR_MAX_PAGES", "2") or 2)))
 
 
 def load_tencent_job_sources() -> list:
@@ -638,6 +640,82 @@ def extract_pdf_text_with_libraries(file_bytes: bytes) -> str:
         return ""
 
 
+def render_pdf_pages_for_ocr(file_bytes: bytes) -> list[dict]:
+    try:
+        import fitz
+    except Exception:
+        return []
+
+    images = []
+    try:
+        with fitz.open(stream=file_bytes, filetype="pdf") as document:
+            page_count = min(len(document), OCR_MAX_PAGES)
+            for page_index in range(page_count):
+                page = document.load_page(page_index)
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                images.append({"mimeType": "image/png", "bytes": pixmap.tobytes("png")})
+    except Exception:
+        return []
+    return images
+
+
+def resume_images_for_ocr(file_name: str, mime_type: str, file_bytes: bytes) -> list[dict]:
+    lower = file_name.lower()
+    if lower.endswith(".pdf") or mime_type == "application/pdf":
+        return render_pdf_pages_for_ocr(file_bytes)
+    if lower.endswith((".png", ".jpg", ".jpeg")) or mime_type in {"image/png", "image/jpeg"}:
+        safe_mime = "image/png" if lower.endswith(".png") or mime_type == "image/png" else "image/jpeg"
+        return [{"mimeType": safe_mime, "bytes": file_bytes}]
+    return []
+
+
+def extract_resume_text_with_ocr(file_name: str, mime_type: str, file_bytes: bytes) -> str:
+    if not AI_API_BASE or not AI_API_KEY or not AI_OCR_MODEL:
+        return ""
+
+    images = resume_images_for_ocr(file_name, mime_type, file_bytes)
+    if not images:
+        return ""
+
+    content = []
+    for image in images:
+        encoded = base64.b64encode(image["bytes"]).decode("ascii")
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{image['mimeType']};base64,{encoded}"},
+                "min_pixels": 3072,
+                "max_pixels": 8388608,
+            }
+        )
+    content.append(
+        {
+            "type": "text",
+            "text": "请按页面顺序逐字提取这份中文/英文简历里的全部可见文字。保留姓名、联系方式、教育、实习、项目、获奖、技能和自我描述等信息。只输出纯文本，不要解释，不要 Markdown。",
+        }
+    )
+
+    body = {
+        "model": AI_OCR_MODEL,
+        "messages": [{"role": "user", "content": content}],
+        "temperature": 0.01,
+        "max_tokens": 4096,
+    }
+    try:
+        req = urllib.request.Request(
+            f"{AI_API_BASE}/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        return clean_extracted_text(payload["choices"][0]["message"]["content"])
+    except Exception as exc:
+        print(f"[{utc_string()}] qwen_ocr_failed file={file_name} error={type(exc).__name__}")
+        return ""
+
+
 def extract_legacy_doc_text(file_name: str, file_bytes: bytes) -> str:
     if not shutil.which("textutil"):
         return ""
@@ -661,15 +739,29 @@ def extract_legacy_doc_text(file_name: str, file_bytes: bytes) -> str:
 
 def extract_resume_text(file_name: str, mime_type: str, file_bytes: bytes) -> str:
     lower = file_name.lower()
-    if lower.endswith((".txt", ".md")) or mime_type.startswith("text/"):
-        return clean_extracted_text(file_bytes.decode("utf-8", errors="replace"))
-    if lower.endswith(".docx"):
-        return clean_extracted_text(extract_docx_text(file_bytes))
-    if lower.endswith(".doc"):
-        return extract_legacy_doc_text(file_name, file_bytes)
-    if lower.endswith(".pdf") or mime_type == "application/pdf":
-        return extract_pdf_text_with_libraries(file_bytes) or clean_extracted_text(extract_pdf_text_basic(file_bytes))
+    try:
+        if lower.endswith((".txt", ".md")) or mime_type.startswith("text/"):
+            return clean_extracted_text(file_bytes.decode("utf-8", errors="replace"))
+        if lower.endswith(".docx"):
+            return clean_extracted_text(extract_docx_text(file_bytes))
+        if lower.endswith(".doc"):
+            return extract_legacy_doc_text(file_name, file_bytes)
+        if lower.endswith(".pdf") or mime_type == "application/pdf":
+            return extract_pdf_text_with_libraries(file_bytes) or clean_extracted_text(extract_pdf_text_basic(file_bytes))
+    except Exception as exc:
+        print(f"[{utc_string()}] resume_text_extract_failed file={file_name} error={type(exc).__name__}")
     return ""
+
+
+def extract_resume_text_for_parsing(file_name: str, mime_type: str, file_bytes: bytes) -> tuple[str, bool]:
+    raw_text = extract_resume_text(file_name, mime_type, file_bytes)
+    if len(raw_text) >= OCR_TEXT_THRESHOLD:
+        return raw_text, False
+
+    ocr_text = extract_resume_text_with_ocr(file_name, mime_type, file_bytes)
+    if len(ocr_text) > len(raw_text):
+        return ocr_text, True
+    return raw_text, False
 
 
 def has_meaningful_value(value) -> bool:
@@ -1889,8 +1981,17 @@ class AppHandler(BaseHTTPRequestHandler):
         path = urllib.parse.unquote(parsed.path)
         if path == "/":
             path = "/index.html"
+        if self.is_blocked_static_path(path):
+            self.send_empty(404)
+            return
         target = (PUBLIC_DIR / path.lstrip("/")).resolve()
-        if not str(target).startswith(str(PUBLIC_DIR.resolve())) or not target.exists() or target.is_dir():
+        if not str(target).startswith(str(PUBLIC_DIR.resolve())):
+            self.send_empty(404)
+            return
+        if not target.exists() or target.is_dir():
+            if Path(path).suffix:
+                self.send_empty(404)
+                return
             target = PUBLIC_DIR / "index.html"
 
         content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
@@ -1901,6 +2002,22 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
+
+    def is_blocked_static_path(self, path: str) -> bool:
+        parts = [part for part in path.split("/") if part]
+        if any(part.startswith(".") for part in parts):
+            return True
+        if parts and parts[0] in {"backups", "data", "deploy", "extension", "scripts", "seed", "uploads"}:
+            return True
+        if parts and parts[-1] in {"DEPLOY.md", "PRD.md", "README.md", "requirements.txt", "server.py", "netlify.toml"}:
+            return True
+        return False
+
+    def send_empty(self, status: int) -> None:
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
 
     def read_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
@@ -1919,7 +2036,10 @@ class AppHandler(BaseHTTPRequestHandler):
         for key, value in (headers or {}).items():
             self.send_header(key, value)
         self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.wfile.write(data)
+        except BrokenPipeError:
+            pass
 
     def add_cors_headers(self) -> None:
         origin = self.headers.get("Origin", "")
@@ -2043,6 +2163,9 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": str(exc)})
         except sqlite3.Error:
             self.send_json(500, {"error": "database_error"})
+        except Exception as exc:
+            print(f"[{utc_string()}] api_error path={path} error={type(exc).__name__}")
+            self.send_json(500, {"error": "server_error"})
 
     def handle_system_status(self) -> None:
         user = self.current_user()
@@ -2221,7 +2344,7 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "file_too_large"})
             return
 
-        raw_text = extract_resume_text(file_name, mime_type, file_bytes)
+        raw_text, used_ocr = extract_resume_text_for_parsing(file_name, mime_type, file_bytes)
         fallback = analyze_resume_text(raw_text) if len(raw_text) >= 20 else empty_resume()
         fallback["sourceFile"] = file_name
 
@@ -2234,12 +2357,15 @@ class AppHandler(BaseHTTPRequestHandler):
 
         if not resume_has_content(parsed):
             message = "未从这个文件识别出可写入字段。请换可复制文本的 PDF/DOCX，或接入 OCR/专用解析服务后再解析扫描版文件。"
+        elif used_ocr:
+            message = "已通过 OCR 识别扫描版简历并完成结构化，请检查字段准确性。"
         elif len(raw_text) < 20:
             message = "已得到解析结果，但本地文本提取很少；请重点检查字段准确性。"
         else:
             message = "简历解析完成，请选择覆盖当前字段或只填空字段。"
 
-        self.send_json(200, {"resume": parsed, "rawText": raw_text, "message": message})
+        response_raw_text = raw_text[:20000]
+        self.send_json(200, {"resume": parsed, "rawText": response_raw_text, "message": message})
 
     def handle_jobs(self) -> None:
         query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)

@@ -60,6 +60,9 @@ AI_MODEL=qwen-plus-latest
 AI_RESUME_MODEL=qwen-plus-latest
 AI_INTERVIEW_MODEL=qwen-plus-latest
 AI_FAST_MODEL=qwen-turbo
+AI_OCR_MODEL=qwen-vl-ocr
+OCR_TEXT_THRESHOLD=120
+OCR_MAX_PAGES=2
 
 RESUME_PARSE_API_URL=
 RESUME_PARSE_API_KEY=
@@ -112,6 +115,18 @@ python3 scripts/sync-tencent-jobs.py --date 2026-08-19 --min-deadline today --im
 ```
 
 The sync path uses `company + sourceUrl` as the upsert key. Existing matching records are updated; unrelated older jobs are not deleted.
+
+## Scanned Resume OCR
+
+Text-based PDF/DOCX files are parsed locally first. If a PDF or image contains too little extractable text, OfferOS can render the first pages and call a Qwen OCR model through the same OpenAI-compatible endpoint:
+
+```bash
+AI_OCR_MODEL=qwen-vl-ocr
+OCR_TEXT_THRESHOLD=120
+OCR_MAX_PAGES=2
+```
+
+Install `PyMuPDF` from `requirements.txt` on the server so scanned PDFs can be rendered into images before OCR.
 
 ## Browser Extension
 
