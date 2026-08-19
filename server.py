@@ -125,6 +125,7 @@ def load_tencent_job_sources() -> list:
 
 
 TENCENT_DOC_ID = os.getenv("TENCENT_DOC_ID", "").strip()
+TENCENT_LINK_OVERRIDES_PATH = os.getenv("TENCENT_LINK_OVERRIDES_PATH", "seed/tencent_job_link_overrides.json")
 TENCENT_JOB_SOURCES = load_tencent_job_sources()
 JOB_BATCHES = ("27届秋招", "实习", "26届春招")
 DEFAULT_SYNC_START_DATE = "2026-07-01"
@@ -1280,7 +1281,7 @@ def clean_url(value) -> str:
     if parsed.query:
         query_items = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
         query_items = [
-            (key, val)
+            (key, strip_tencent_query_tail(key, val))
             for key, val in query_items
             if key.lower() not in {"sessionid", "session_id"}
         ]
@@ -1295,9 +1296,34 @@ def clean_url(value) -> str:
 def strip_tencent_url_tail(value: str) -> str:
     text = value or ""
     lower = text.lower()
-    for suffix in ("jobslisth", "jobsh", "campush", "positionh", "posth", ".htmlh"):
+    for suffix in (
+        "jobslisth",
+        "jobsh",
+        "campush",
+        "positionh",
+        "positionsh",
+        "posth",
+        "recruitmenth",
+        "internsh",
+        "indexh",
+        ".htmlh",
+        ".phph",
+    ):
         if lower.endswith(suffix):
             return text[:-1]
+    return text
+
+
+def strip_tencent_query_tail(key: str, value: str) -> str:
+    text = value or ""
+    lower_key = (key or "").lower()
+    lower = text.lower()
+    if not lower.endswith("h"):
+        return text
+    if lower_key in {"lang"} and lower in {"zhh", "en-ush", "zh-cnh"}:
+        return text[:-1]
+    if lower_key in {"page", "type", "silence", "current", "limit"} and re.match(r"^[0-9]+h$", lower):
+        return text[:-1]
     return text
 
 
@@ -1755,7 +1781,24 @@ def tencent_company_key(value: str) -> str:
     text = clean_text(value).lower()
     text = re.sub(r"[（(].*?[）)]", "", text)
     text = re.split(r"[-－—–·•｜|]", text, maxsplit=1)[0]
-    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", text)
+    key = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", text)
+    for token in (
+        "有限责任公司",
+        "股份有限公司",
+        "有限公司",
+        "集团股份",
+        "集团",
+        "控股",
+        "科技",
+        "技术",
+        "公司",
+        "校招计划",
+        "校园招聘",
+        "校招",
+        "招聘",
+    ):
+        key = key.replace(token, "")
+    return key
 
 
 def tencent_company_matches(company: str, link_text: str) -> bool:
@@ -1950,6 +1993,128 @@ def deadline_is_valid(value, min_deadline) -> bool:
     return not parsed or parsed >= min_deadline
 
 
+def tencent_campus_url_score(value) -> int:
+    url = clean_url(value)
+    if not url:
+        return 0
+    try:
+        parsed = urllib.parse.urlsplit(url.lower())
+    except ValueError:
+        return 0
+    netloc = parsed.netloc
+    full = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, parsed.fragment))
+    if "mp.weixin.qq.com" in netloc:
+        return 1
+    if "social-recruitment" in full and "campus" not in full:
+        return 0
+    if any(keyword in full for keyword in ("campus", "xiaoyuan", "graduate", "graduates", "school", "university")):
+        return 5
+    if "join.qq.com" in netloc:
+        return 5
+    if any(
+        keyword in full
+        for keyword in (
+            "zhaopin",
+            "recruit",
+            "recruitment",
+            "career",
+            "careers",
+            "apply",
+            "job",
+            "jobs",
+            "position",
+            "positions",
+            "zhiye",
+            "mokahr",
+            "hotjob",
+            "feishu",
+            "51job",
+            "yingjiesheng",
+            "iguopin",
+        )
+    ):
+        return 4
+    if any(
+        host in netloc
+        for host in (
+            "wjx.cn",
+            "jsjform.com",
+            "mikecrm.com",
+            "jinshuju.net",
+            "wenjuan.com",
+        )
+    ):
+        return 3
+    return 0
+
+
+def load_tencent_link_overrides() -> list:
+    path = Path(TENCENT_LINK_OVERRIDES_PATH)
+    if not path.is_absolute():
+        path = BASE_DIR / path
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    items = payload.get("overrides") if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        return []
+    overrides = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        company = clean_text(item.get("company"))
+        batch = normalize_job_batch(item.get("batch") or "")
+        source_url = clean_url(item.get("sourceUrl") or item.get("source_url"))
+        if not company or batch not in JOB_BATCHES or not source_url:
+            continue
+        overrides.append(
+            {
+                "company": company,
+                "batch": batch,
+                "sourceUrl": source_url,
+                "announcementUrl": clean_url(item.get("announcementUrl") or item.get("announcement_url")),
+                "matchedCompany": clean_text(item.get("matchedCompany")) or company,
+            }
+        )
+    return overrides
+
+
+def build_tencent_link_override_map(overrides: list) -> dict:
+    override_map = {}
+    for item in overrides:
+        key = (tencent_company_key(item.get("company")), normalize_job_batch(item.get("batch") or ""))
+        if not key[0] or not key[1]:
+            continue
+        override_map.setdefault(key, []).append(item)
+    for candidates in override_map.values():
+        candidates.sort(key=lambda item: (-tencent_campus_url_score(item.get("sourceUrl")), item.get("company", "")))
+    return override_map
+
+
+def tencent_row_fallback_key(row: dict) -> tuple:
+    normalized = normalize_csv_row(row)
+    return (tencent_company_key(normalized.get("company")), normalize_job_batch(normalized.get("batch") or ""))
+
+
+def tencent_job_fallback_key(job: dict) -> tuple:
+    return (tencent_company_key(job.get("company")), normalize_job_batch(job.get("batch") or ""))
+
+
+def find_tencent_link_override(row: dict, override_map: dict):
+    candidates = override_map.get(tencent_row_fallback_key(row)) or []
+    return candidates[0] if candidates else None
+
+
+def find_tencent_company_link_fallback(row: dict, fallback_jobs: dict):
+    candidates = fallback_jobs.get(tencent_row_fallback_key(row)) or []
+    if not candidates:
+        return None
+    return candidates[0]
+
+
 TENCENT_COMMENTARY_MARKERS = (
     "未检索到相关资料",
     "应届生",
@@ -2019,8 +2184,8 @@ def tencent_row_to_job(row: dict, start_date, end_date, min_deadline):
     delivery_url = first_url(normalized.get("sourceUrl"))
     announcement_url = first_url(normalized.get("announcementUrl"))
     source_url = delivery_url or announcement_url
-    if row.get("_sourceKind") == "sheet" and announcement_url:
-        source_url = announcement_url
+    if row.get("_fallbackCompany"):
+        company = clean_text(row.get("_fallbackCompany")) or company
     if not company:
         return None, "缺公司名称"
     if not source_url:
@@ -2125,30 +2290,78 @@ def collect_tencent_jobs(start_date=None, end_date=None, min_deadline=None, incl
     skipped = {}
     skipped_rows = []
     source_stats = []
+    skipped_records = []
+    override_map = build_tencent_link_override_map(load_tencent_link_overrides())
     for source in TENCENT_JOB_SOURCES:
         rows = parse_tencent_source_rows(source)
-        kept = 0
-        source_skipped = {}
+        source_stat = {
+            "name": source["name"],
+            "tab": source["tab"],
+            "scanned": len(rows),
+            "kept": 0,
+            "filledFromOverrideLink": 0,
+            "filledFromCompanyLink": 0,
+            "skipped": {},
+        }
+        source_stats.append(source_stat)
         for row in rows:
             scanned += 1
             job, reason = tencent_row_to_job(row, start, end, deadline_floor)
             if job:
                 jobs.append(job)
-                kept += 1
+                source_stat["kept"] += 1
             else:
                 skipped[reason] = skipped.get(reason, 0) + 1
-                source_skipped[reason] = source_skipped.get(reason, 0) + 1
-                if include_skipped_rows:
-                    skipped_rows.append(tencent_skipped_row_summary(source, row, reason))
-        source_stats.append(
-            {
-                "name": source["name"],
-                "tab": source["tab"],
-                "scanned": len(rows),
-                "kept": kept,
-                "skipped": source_skipped,
-            }
-        )
+                source_stat["skipped"][reason] = source_stat["skipped"].get(reason, 0) + 1
+                skipped_records.append({"source": source, "sourceStat": source_stat, "row": row, "reason": reason, "recovered": False})
+
+    fallback_jobs = {}
+    for job in jobs:
+        if tencent_campus_url_score(job.get("sourceUrl")) < 3:
+            continue
+        fallback_jobs.setdefault(tencent_job_fallback_key(job), []).append(job)
+    for candidates in fallback_jobs.values():
+        candidates.sort(key=lambda item: (-tencent_campus_url_score(item.get("sourceUrl")), item.get("company", "")))
+
+    filled_from_company_link = 0
+    filled_from_override_link = 0
+    for record in skipped_records:
+        if record["reason"] != "缺投递/公告链接":
+            continue
+        override = find_tencent_link_override(record["row"], override_map)
+        fallback = None if override else find_tencent_company_link_fallback(record["row"], fallback_jobs)
+        resolved = override or fallback
+        if not resolved:
+            continue
+        hydrated_row = dict(record["row"])
+        hydrated_row["_fallbackCompany"] = resolved.get("company", "")
+        hydrated_row["投递方式"] = resolved.get("sourceUrl", "")
+        if resolved.get("announcementUrl"):
+            hydrated_row["企业招聘公告"] = resolved.get("announcementUrl", "")
+        job, reason = tencent_row_to_job(hydrated_row, start, end, deadline_floor)
+        if not job:
+            continue
+        jobs.append(job)
+        record["recovered"] = True
+        if override:
+            filled_from_override_link += 1
+            record["sourceStat"]["filledFromOverrideLink"] += 1
+        else:
+            filled_from_company_link += 1
+            record["sourceStat"]["filledFromCompanyLink"] += 1
+        record["sourceStat"]["kept"] += 1
+        skipped[record["reason"]] = max(0, skipped.get(record["reason"], 0) - 1)
+        record["sourceStat"]["skipped"][record["reason"]] = max(0, record["sourceStat"]["skipped"].get(record["reason"], 0) - 1)
+
+    skipped = {reason: count for reason, count in skipped.items() if count}
+    for stat in source_stats:
+        stat["skipped"] = {reason: count for reason, count in stat["skipped"].items() if count}
+    if include_skipped_rows:
+        skipped_rows = [
+            tencent_skipped_row_summary(record["source"], record["row"], record["reason"])
+            for record in skipped_records
+            if not record["recovered"]
+        ]
 
     merged_jobs = merge_tencent_jobs(jobs)
     result = {
@@ -2161,6 +2374,8 @@ def collect_tencent_jobs(start_date=None, end_date=None, min_deadline=None, incl
             "matched": len(jobs),
             "deduped": max(0, len(jobs) - len(merged_jobs)),
             "ready": len(merged_jobs),
+            "filledFromOverrideLink": filled_from_override_link,
+            "filledFromCompanyLink": filled_from_company_link,
             "skipped": skipped,
             "sources": source_stats,
         },
