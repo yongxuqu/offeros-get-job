@@ -1718,17 +1718,29 @@ const App = {
   },
 
   applicationCard(item, statuses) {
+    const actionLabels = {
+      saved: "去投递",
+      preparing: "去投递",
+      applied: "看进度",
+      test: "去测评",
+      interview: "去面试",
+      offer: "看 Offer",
+    };
+    const actionLabel = actionLabels[item.status] || "";
+    const actionUrl = item.job.sourceUrl || "#";
     return `
       <div class="application-card">
+        <button class="application-remove" onclick="App.deleteApplication(${item.id})" aria-label="移出看板" title="移出看板">&times;</button>
         <strong>${this.escape(item.job.company)} · ${this.escape(item.job.title)}</strong>
         <p>${this.escape(item.job.city)} · ${this.escape(item.job.batch || "未标注批次")} · ${this.escape(item.job.companyType || "未分类")} · 截止 ${this.escape(item.job.deadline)}</p>
         <select onchange="App.updateApplication(${item.id}, this.value)">
           ${statuses.map(([status, label]) => `<option value="${status}" ${item.status === status ? "selected" : ""}>${label}</option>`).join("")}
         </select>
-        <div class="toolbar" style="margin-top: 10px;">
-          <a class="btn small" href="${this.escape(item.job.sourceUrl || "#")}" target="_blank" rel="noopener noreferrer">去投递</a>
-          <button class="btn small danger" onclick="App.deleteApplication(${item.id})">移出看板</button>
-        </div>
+        ${actionLabel ? `
+          <div class="application-actions">
+            <a class="btn small application-action" href="${this.escape(actionUrl)}" target="_blank" rel="noopener noreferrer">${actionLabel}</a>
+          </div>
+        ` : ""}
       </div>
     `;
   },

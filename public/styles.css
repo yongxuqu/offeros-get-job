@@ -775,10 +775,11 @@ select:focus {
 }
 
 .application-card {
+  position: relative;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #0c0f15;
-  padding: 12px;
+  padding: 12px 38px 12px 12px;
   margin-bottom: 10px;
 }
 
@@ -791,6 +792,40 @@ select:focus {
   margin: 0 0 10px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.application-remove {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--faint);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.application-remove:hover {
+  color: #ffd7de;
+  border-color: rgba(255, 122, 144, 0.35);
+  background: rgba(255, 122, 144, 0.08);
+}
+
+.application-actions {
+  display: flex;
+  margin-top: 10px;
+}
+
+.application-action {
+  width: 100%;
+  white-space: nowrap;
 }
 
 .interview-board {
