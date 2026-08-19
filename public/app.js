@@ -56,9 +56,31 @@ const App = {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data.error || "request_failed");
+      throw new Error(this.formatApiError(data.error || "request_failed", res.status));
     }
     return data;
+  },
+
+  formatApiError(error, status = 0) {
+    if (status === 504 || error === "request_failed_504") {
+      return "服务器解析超时，请稍后重试，或换一份可复制文本的 PDF/DOCX。";
+    }
+    if (status === 413 || error === "file_too_large") {
+      return "文件太大，单份简历请控制在 8MB 内。";
+    }
+    if (error === "request_timeout") {
+      return "请求超时，请稍后重试。";
+    }
+    if (error === "network_error") {
+      return "网络连接失败，请检查当前访问地址是否能连到后端。";
+    }
+    const labels = {
+      not_authenticated: "登录状态已失效，请重新登录。",
+      invalid_file_data: "文件读取失败，请重新选择文件。",
+      file_required: "请先选择一份简历文件。",
+      server_error: "服务器处理失败，请稍后重试。",
+    };
+    return labels[error] || error || "请求失败";
   },
 
   async loadData() {
@@ -1143,11 +1165,11 @@ const App = {
         if (xhr.status >= 200 && xhr.status < 300) {
           resolve(data);
         } else {
-          reject(new Error(data.error || `request_failed_${xhr.status || "unknown"}`));
+          reject(new Error(this.formatApiError(data.error || `request_failed_${xhr.status || "unknown"}`, xhr.status)));
         }
       };
-      xhr.onerror = () => reject(new Error("network_error"));
-      xhr.ontimeout = () => reject(new Error("request_timeout"));
+      xhr.onerror = () => reject(new Error(this.formatApiError("network_error")));
+      xhr.ontimeout = () => reject(new Error(this.formatApiError("request_timeout")));
       xhr.send(JSON.stringify(payload));
     });
   },

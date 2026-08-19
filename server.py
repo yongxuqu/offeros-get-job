@@ -73,6 +73,7 @@ AI_FAST_MODEL = os.getenv("AI_FAST_MODEL", "qwen-turbo")
 AI_OCR_MODEL = os.getenv("AI_OCR_MODEL", "qwen-vl-ocr")
 RESUME_PARSE_API_URL = os.getenv("RESUME_PARSE_API_URL", "")
 RESUME_PARSE_API_KEY = os.getenv("RESUME_PARSE_API_KEY", "")
+RESUME_PARSE_SEND_FILE = os.getenv("RESUME_PARSE_SEND_FILE", "false").strip().lower() in {"1", "true", "yes", "on"}
 STT_API_URL = os.getenv("STT_API_URL", "")
 STT_API_KEY = os.getenv("STT_API_KEY", "")
 STT_MODEL = os.getenv("STT_MODEL", "paraformer-v2")
@@ -81,6 +82,9 @@ MAX_RESUME_FILE_SIZE = 8 * 1024 * 1024
 MAX_JSON_BODY_SIZE = 16 * 1024 * 1024
 OCR_TEXT_THRESHOLD = max(20, int(os.getenv("OCR_TEXT_THRESHOLD", "120") or 120))
 OCR_MAX_PAGES = max(1, min(4, int(os.getenv("OCR_MAX_PAGES", "2") or 2)))
+AI_OCR_TIMEOUT = max(10, min(120, int(os.getenv("AI_OCR_TIMEOUT", "45") or 45)))
+AI_RESUME_PARSE_TIMEOUT = max(10, min(120, int(os.getenv("AI_RESUME_PARSE_TIMEOUT", "35") or 35)))
+RESUME_PARSE_SOFT_TIMEOUT = max(20, min(180, int(os.getenv("RESUME_PARSE_SOFT_TIMEOUT", "70") or 70)))
 
 
 def load_tencent_job_sources() -> list:
@@ -619,6 +623,12 @@ def clean_extracted_text(text: str) -> str:
     return text.strip()
 
 
+def resume_file_log_id(file_name: str) -> str:
+    suffix = Path(file_name).suffix.lower()[:12] or ".file"
+    digest = hashlib.sha256(file_name.encode("utf-8", errors="ignore")).hexdigest()[:10]
+    return f"{digest}{suffix}"
+
+
 def extract_pdf_text_with_libraries(file_bytes: bytes) -> str:
     try:
         from pypdf import PdfReader
@@ -708,11 +718,11 @@ def extract_resume_text_with_ocr(file_name: str, mime_type: str, file_bytes: byt
             headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=AI_OCR_TIMEOUT) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
         return clean_extracted_text(payload["choices"][0]["message"]["content"])
     except Exception as exc:
-        print(f"[{utc_string()}] qwen_ocr_failed file={file_name} error={type(exc).__name__}")
+        print(f"[{utc_string()}] qwen_ocr_failed file_id={resume_file_log_id(file_name)} error={type(exc).__name__}")
         return ""
 
 
@@ -749,7 +759,7 @@ def extract_resume_text(file_name: str, mime_type: str, file_bytes: bytes) -> st
         if lower.endswith(".pdf") or mime_type == "application/pdf":
             return extract_pdf_text_with_libraries(file_bytes) or clean_extracted_text(extract_pdf_text_basic(file_bytes))
     except Exception as exc:
-        print(f"[{utc_string()}] resume_text_extract_failed file={file_name} error={type(exc).__name__}")
+        print(f"[{utc_string()}] resume_text_extract_failed file_id={resume_file_log_id(file_name)} error={type(exc).__name__}")
     return ""
 
 
@@ -848,7 +858,7 @@ def normalize_resume_ai_output(resume: dict) -> dict:
     return resume
 
 
-def parse_resume_with_external_api(file_info: dict, raw_text: str, fallback: dict) -> dict:
+def parse_resume_with_external_api(file_info: dict, raw_text: str, fallback: dict, timeout: int | None = None) -> dict:
     if RESUME_PARSE_API_URL:
         headers = {"Content-Type": "application/json"}
         if RESUME_PARSE_API_KEY:
@@ -856,10 +866,11 @@ def parse_resume_with_external_api(file_info: dict, raw_text: str, fallback: dic
         body = {
             "fileName": file_info["fileName"],
             "mimeType": file_info["mimeType"],
-            "base64": file_info["base64"],
             "text": raw_text,
             "schema": "zhixu_resume_v1",
         }
+        if RESUME_PARSE_SEND_FILE:
+            body["base64"] = file_info.get("base64", "")
         try:
             req = urllib.request.Request(
                 RESUME_PARSE_API_URL,
@@ -867,10 +878,11 @@ def parse_resume_with_external_api(file_info: dict, raw_text: str, fallback: dic
                 headers=headers,
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=40) as resp:
+            with urllib.request.urlopen(req, timeout=timeout or AI_RESUME_PARSE_TIMEOUT) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
             return normalize_resume_ai_output(payload.get("resume") or payload)
-        except (urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+        except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as exc:
+            print(f"[{utc_string()}] resume_external_parse_failed file_id={resume_file_log_id(file_info.get('fileName', ''))} error={type(exc).__name__}")
             return normalize_resume_ai_output(fallback)
 
     if AI_API_BASE and AI_API_KEY and len(raw_text) >= 20:
@@ -920,11 +932,12 @@ def parse_resume_with_external_api(file_info: dict, raw_text: str, fallback: dic
                 headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=40) as resp:
+            with urllib.request.urlopen(req, timeout=timeout or AI_RESUME_PARSE_TIMEOUT) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
             content = payload["choices"][0]["message"]["content"]
             return normalize_resume_ai_output(parse_json_object(content))
-        except (urllib.error.URLError, KeyError, json.JSONDecodeError, TimeoutError):
+        except (urllib.error.URLError, KeyError, json.JSONDecodeError, TimeoutError) as exc:
+            print(f"[{utc_string()}] resume_ai_parse_failed file_id={resume_file_log_id(file_info.get('fileName', ''))} error={type(exc).__name__}")
             return fallback
 
     return normalize_resume_ai_output(fallback)
@@ -2328,6 +2341,7 @@ class AppHandler(BaseHTTPRequestHandler):
         user = self.require_user()
         if not user:
             return
+        started_at = time.monotonic()
         body = self.read_json()
         file_name = (body.get("fileName") or "").strip()
         mime_type = (body.get("mimeType") or "application/octet-stream").strip()
@@ -2344,16 +2358,38 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "file_too_large"})
             return
 
+        print(
+            f"[{utc_string()}] resume_parse_start user={user['id']} file_id={resume_file_log_id(file_name)} "
+            f"mime={mime_type} size={len(file_bytes)}"
+        )
         raw_text, used_ocr = extract_resume_text_for_parsing(file_name, mime_type, file_bytes)
+        elapsed_after_text = time.monotonic() - started_at
+        print(
+            f"[{utc_string()}] resume_parse_text_done user={user['id']} file_id={resume_file_log_id(file_name)} "
+            f"used_ocr={int(used_ocr)} text_len={len(raw_text)} elapsed={elapsed_after_text:.2f}s"
+        )
         fallback = analyze_resume_text(raw_text) if len(raw_text) >= 20 else empty_resume()
         fallback["sourceFile"] = file_name
 
-        parsed = parse_resume_with_external_api(
-            {"fileName": file_name, "mimeType": mime_type, "base64": encoded},
-            raw_text,
-            fallback,
-        )
+        remaining_budget = RESUME_PARSE_SOFT_TIMEOUT - elapsed_after_text
+        if remaining_budget < 12:
+            print(
+                f"[{utc_string()}] resume_parse_soft_timeout user={user['id']} file_id={resume_file_log_id(file_name)} "
+                f"elapsed={elapsed_after_text:.2f}s"
+            )
+            parsed = fallback
+        else:
+            parsed = parse_resume_with_external_api(
+                {"fileName": file_name, "mimeType": mime_type, "base64": encoded},
+                raw_text,
+                fallback,
+                timeout=max(10, min(AI_RESUME_PARSE_TIMEOUT, int(remaining_budget))),
+            )
         parsed["sourceFile"] = parsed.get("sourceFile") or file_name
+        print(
+            f"[{utc_string()}] resume_parse_done user={user['id']} file_id={resume_file_log_id(file_name)} "
+            f"has_content={int(resume_has_content(parsed))} elapsed={time.monotonic() - started_at:.2f}s"
+        )
 
         if not resume_has_content(parsed):
             message = "未从这个文件识别出可写入字段。请换可复制文本的 PDF/DOCX，或接入 OCR/专用解析服务后再解析扫描版文件。"
