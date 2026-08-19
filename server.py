@@ -64,6 +64,11 @@ APP_ENV = os.getenv("APP_ENV", "development")
 APP_SECRET = os.getenv("APP_SECRET", "dev-secret-change-before-production")
 SESSION_TTL = 60 * 60 * 24 * 30
 CODE_TTL = 60 * 10
+CODE_SEND_WINDOW = 60
+CODE_SEND_WINDOW_MAX = 3
+CODE_SEND_HOUR_MAX = 10
+CODE_MAX_ATTEMPTS = 5
+CODE_LOCK_TTL = 60 * 10
 
 AI_API_BASE = os.getenv("AI_API_BASE", "").rstrip("/")
 AI_API_KEY = os.getenv("AI_API_KEY", "")
@@ -257,7 +262,9 @@ def init_db() -> None:
                 code_hash TEXT NOT NULL,
                 expires_at INTEGER NOT NULL,
                 consumed_at INTEGER,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                locked_until INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS sessions (
@@ -326,6 +333,11 @@ def init_db() -> None:
             );
             """
         )
+        verification_columns = {row["name"] for row in conn.execute("PRAGMA table_info(email_verifications)").fetchall()}
+        if "attempts" not in verification_columns:
+            conn.execute("ALTER TABLE email_verifications ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+        if "locked_until" not in verification_columns:
+            conn.execute("ALTER TABLE email_verifications ADD COLUMN locked_until INTEGER")
         job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
         if "company_type" not in job_columns:
             conn.execute("ALTER TABLE jobs ADD COLUMN company_type TEXT NOT NULL DEFAULT '未分类'")
@@ -2351,12 +2363,19 @@ class AppHandler(BaseHTTPRequestHandler):
 
         code = f"{secrets.randbelow(1_000_000):06d}"
         with connect_db() as conn:
-            recent = conn.execute(
+            recent_minute = conn.execute(
                 "SELECT COUNT(*) AS count FROM email_verifications WHERE email = ? AND created_at > ?",
-                (email_addr, now() - 60),
+                (email_addr, now() - CODE_SEND_WINDOW),
             ).fetchone()["count"]
-            if recent >= 3:
-                self.send_json(429, {"error": "too_many_requests"})
+            recent_hour = conn.execute(
+                "SELECT COUNT(*) AS count FROM email_verifications WHERE email = ? AND created_at > ?",
+                (email_addr, now() - 60 * 60),
+            ).fetchone()["count"]
+            if recent_minute >= CODE_SEND_WINDOW_MAX:
+                self.send_json(429, {"error": "too_many_requests", "retryAfter": CODE_SEND_WINDOW})
+                return
+            if recent_hour >= CODE_SEND_HOUR_MAX:
+                self.send_json(429, {"error": "too_many_requests", "retryAfter": 60 * 60})
                 return
             conn.execute(
                 "INSERT INTO email_verifications (email, code_hash, expires_at, created_at) VALUES (?, ?, ?, ?)",
@@ -2380,7 +2399,10 @@ class AppHandler(BaseHTTPRequestHandler):
         body = self.read_json()
         email_addr = (body.get("email") or "").strip().lower()
         code = (body.get("code") or "").strip()
-        if not EMAIL_RE.match(email_addr) or not re.match(r"^\d{6}$", code):
+        if not EMAIL_RE.match(email_addr):
+            self.send_json(400, {"error": "invalid_email"})
+            return
+        if not re.match(r"^\d{6}$", code):
             self.send_json(400, {"error": "invalid_code"})
             return
 
@@ -2388,13 +2410,32 @@ class AppHandler(BaseHTTPRequestHandler):
             code_row = conn.execute(
                 """
                 SELECT * FROM email_verifications
-                WHERE email = ? AND consumed_at IS NULL AND expires_at > ?
+                WHERE email = ? AND consumed_at IS NULL
                 ORDER BY created_at DESC LIMIT 1
                 """,
-                (email_addr, now()),
+                (email_addr,),
             ).fetchone()
-            if not code_row or not hmac.compare_digest(code_row["code_hash"], hash_code(email_addr, code)):
-                self.send_json(400, {"error": "invalid_code"})
+            if not code_row:
+                self.send_json(400, {"error": "code_not_requested"})
+                return
+            if code_row["locked_until"] and code_row["locked_until"] > now():
+                self.send_json(429, {"error": "too_many_attempts", "retryAfter": code_row["locked_until"] - now()})
+                return
+            if code_row["expires_at"] <= now():
+                conn.execute("UPDATE email_verifications SET consumed_at = ? WHERE id = ?", (now(), code_row["id"]))
+                self.send_json(400, {"error": "code_expired"})
+                return
+            if not hmac.compare_digest(code_row["code_hash"], hash_code(email_addr, code)):
+                attempts = int(code_row["attempts"] or 0) + 1
+                if attempts >= CODE_MAX_ATTEMPTS:
+                    conn.execute(
+                        "UPDATE email_verifications SET attempts = ?, locked_until = ? WHERE id = ?",
+                        (attempts, now() + CODE_LOCK_TTL, code_row["id"]),
+                    )
+                    self.send_json(429, {"error": "too_many_attempts", "retryAfter": CODE_LOCK_TTL})
+                    return
+                conn.execute("UPDATE email_verifications SET attempts = ? WHERE id = ?", (attempts, code_row["id"]))
+                self.send_json(400, {"error": "invalid_code", "attemptsRemaining": CODE_MAX_ATTEMPTS - attempts})
                 return
 
             conn.execute("UPDATE email_verifications SET consumed_at = ? WHERE id = ?", (now(), code_row["id"]))

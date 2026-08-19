@@ -77,15 +77,16 @@ Use HTTPS in production. Configure your DNS and certificate provider according t
 ```bash
 sudo chmod +x /opt/offeros/scripts/backup-sqlite.sh
 sudo mkdir -p /opt/offeros/backups
+sudo mkdir -p /opt/offeros/logs
 ```
 
 Add a daily backup cron:
 
 ```text
-20 3 * * * APP_DIR=/opt/offeros BACKUP_DIR=/opt/offeros/backups /opt/offeros/scripts/backup-sqlite.sh
+20 3 * * * /usr/sbin/runuser -u nginx -- /bin/bash -lc "cd /opt/offeros && APP_DIR=/opt/offeros BACKUP_DIR=/opt/offeros/backups RETENTION_DAYS=14 ./scripts/backup-sqlite.sh >> logs/sqlite-backup.log 2>&1"
 ```
 
-The backup script keeps the latest 14 daily backups.
+The backup script runs SQLite online backup, verifies `PRAGMA integrity_check`, and keeps 14 days by default. Restore steps are documented in [OPERATIONS.md](OPERATIONS.md).
 
 ## 5. Job Data Import
 
@@ -132,3 +133,5 @@ sudo journalctl -u offeros -n 100 --no-pager
 ```
 
 Never commit real `.env` files, SQLite databases, uploaded resumes, SMTP credentials, or API keys.
+
+For regular operations, see [OPERATIONS.md](OPERATIONS.md).

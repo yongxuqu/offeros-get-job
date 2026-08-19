@@ -56,12 +56,12 @@ const App = {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(this.formatApiError(data.error || "request_failed", res.status));
+      throw new Error(this.formatApiError(data.error || "request_failed", res.status, data));
     }
     return data;
   },
 
-  formatApiError(error, status = 0) {
+  formatApiError(error, status = 0, data = {}) {
     if (status === 504 || error === "request_failed_504") {
       return "服务器解析超时，请稍后重试，或换一份可复制文本的 PDF/DOCX。";
     }
@@ -76,6 +76,14 @@ const App = {
     }
     const labels = {
       not_authenticated: "登录状态已失效，请重新登录。",
+      invalid_email: "请输入正确的邮箱地址。",
+      invalid_code: data.attemptsRemaining ? `验证码不正确，还可尝试 ${data.attemptsRemaining} 次。` : "验证码不正确。",
+      code_not_requested: "请先发送验证码。",
+      code_expired: "验证码已过期，请重新发送。",
+      too_many_requests: data.retryAfter ? `请求太频繁，请 ${Math.ceil(data.retryAfter / 60)} 分钟后再试。` : "请求太频繁，请稍后再试。",
+      too_many_attempts: data.retryAfter ? `验证码错误次数过多，请 ${Math.ceil(data.retryAfter / 60)} 分钟后再试。` : "验证码错误次数过多，请稍后再试。",
+      email_send_failed: "验证码邮件发送失败，请稍后再试。",
+      smtp_not_configured: "验证码邮件服务未配置。",
       invalid_file_data: "文件读取失败，请重新选择文件。",
       file_required: "请先选择一份简历文件。",
       server_error: "服务器处理失败，请稍后重试。",
@@ -1200,7 +1208,7 @@ const App = {
         if (xhr.status >= 200 && xhr.status < 300) {
           resolve(data);
         } else {
-          reject(new Error(this.formatApiError(data.error || `request_failed_${xhr.status || "unknown"}`, xhr.status)));
+          reject(new Error(this.formatApiError(data.error || `request_failed_${xhr.status || "unknown"}`, xhr.status, data)));
         }
       };
       xhr.onerror = () => reject(new Error(this.formatApiError("network_error")));

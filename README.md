@@ -38,6 +38,8 @@ http://127.0.0.1:8000
 
 The app reads `.env` from the project root. Verification codes are sent through the configured SMTP account and are not returned to the frontend.
 
+Email-code login rate limits: 3 codes per email per minute, 10 codes per email per hour, 10-minute code expiry, and a 10-minute lock after 5 wrong attempts for one code.
+
 ## Environment
 
 Key variables:
@@ -142,6 +144,8 @@ The extension fills fields on the current page only. It does not submit forms au
 ## Deployment
 
 See [DEPLOY.md](DEPLOY.md) for an example single-server deployment with Nginx, systemd, SQLite backups, and a daily job-sync cron.
+
+See [OPERATIONS.md](OPERATIONS.md) for restart, log inspection, SQLite backup/restore, job-sync verification, and login troubleshooting.
 
 Before deploying, make sure real secrets are stored only in server environment variables or `.env`, and never committed.
 
