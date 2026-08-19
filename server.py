@@ -1448,30 +1448,35 @@ def upsert_job(conn: sqlite3.Connection, payload: dict) -> int:
     requirements = json.dumps(job["requirements"], ensure_ascii=False)
     job_id = int(job["id"] or 0) if str(job.get("id") or "").isdigit() else 0
     if job_id:
-        conn.execute(
-            """
-            UPDATE jobs
-            SET company = ?, title = ?, city = ?, category = ?, company_type = ?, batch = ?, source = ?,
-                deadline = ?, source_url = ?, description = ?, requirements = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                job["company"],
-                job["title"],
-                job["city"],
-                job["category"],
-                job["company_type"],
-                job["batch"],
-                job["source"],
-                job["deadline"],
-                job["source_url"],
-                job["description"],
-                requirements,
-                now(),
-                job_id,
-            ),
-        )
-        return job_id
+        try:
+            conn.execute(
+                """
+                UPDATE jobs
+                SET company = ?, title = ?, city = ?, category = ?, company_type = ?, batch = ?, source = ?,
+                    deadline = ?, source_url = ?, description = ?, requirements = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    job["company"],
+                    job["title"],
+                    job["city"],
+                    job["category"],
+                    job["company_type"],
+                    job["batch"],
+                    job["source"],
+                    job["deadline"],
+                    job["source_url"],
+                    job["description"],
+                    requirements,
+                    now(),
+                    job_id,
+                ),
+            )
+            return job_id
+        except sqlite3.IntegrityError:
+            # A legacy row can normalize to an already-existing company/link key.
+            # Fall back to the canonical company/link upsert and let import cleanup remove stale rows.
+            pass
 
     conn.execute(
         """

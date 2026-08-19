@@ -48,30 +48,54 @@ def main() -> None:
     deleted = 0
     preserved = 0
     with server.connect_db() as conn:
+        existing_any_by_url = {}
+        existing_any_is_canonical = {}
+        for row in conn.execute("SELECT id, company, source_url FROM jobs ORDER BY id"):
+            source_url = server.clean_url(row["source_url"])
+            key = (row["company"], source_url)
+            is_canonical = source_url == row["source_url"]
+            if key not in existing_any_by_url or (is_canonical and not existing_any_is_canonical[key]):
+                existing_any_by_url[key] = row["id"]
+                existing_any_is_canonical[key] = is_canonical
         existing_by_url = {}
+        existing_is_canonical = {}
         existing_by_key = collections.defaultdict(list)
         if args.replace_source:
             existing_rows = conn.execute("SELECT * FROM jobs WHERE source = ? ORDER BY id", (args.replace_source,)).fetchall()
             for row in existing_rows:
-                existing_by_url[(row["company"], server.clean_url(row["source_url"]))] = row["id"]
+                source_url = server.clean_url(row["source_url"])
+                key = (row["company"], source_url)
+                is_canonical = source_url == row["source_url"]
+                if key not in existing_by_url or (is_canonical and not existing_is_canonical[key]):
+                    existing_by_url[key] = row["id"]
+                    existing_is_canonical[key] = is_canonical
                 existing_by_key[existing_job_key(row)].append(row["id"])
 
         used_ids = set()
         for job in jobs:
             job = dict(job)
             job.pop("id", None)
+            normalized_job = server.sanitize_job_payload(job)
             if args.replace_source:
-                company = str(job.get("company") or "").strip()
-                source_url = server.clean_url(job.get("sourceUrl") or job.get("source_url") or "")
-                matched_id = existing_by_url.get((company, source_url))
+                company = normalized_job["company"]
+                source_url = normalized_job["source_url"]
+                target_id = existing_by_url.get((company, source_url))
+                target_owner_id = existing_any_by_url.get((company, source_url))
+                matched_id = target_id
                 if not matched_id or matched_id in used_ids:
                     for candidate_id in existing_by_key.get(snapshot_job_key(job), []):
                         if candidate_id not in used_ids:
                             matched_id = candidate_id
                             break
+                if target_owner_id and target_owner_id in used_ids:
+                    matched_id = 0
+                elif target_owner_id and matched_id != target_owner_id:
+                    matched_id = 0
                 if matched_id and matched_id not in used_ids:
                     job["id"] = matched_id
             job_id = server.upsert_job(conn, job)
+            existing_any_by_url[(normalized_job["company"], normalized_job["source_url"])] = job_id
+            existing_any_is_canonical[(normalized_job["company"], normalized_job["source_url"])] = True
             used_ids.add(job_id)
             imported += 1
         if args.replace_source:
