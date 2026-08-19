@@ -17,6 +17,7 @@ import smtplib
 import sqlite3
 import struct
 import subprocess
+import threading
 import time
 import tempfile
 import urllib.error
@@ -85,6 +86,7 @@ OCR_MAX_PAGES = max(1, min(4, int(os.getenv("OCR_MAX_PAGES", "2") or 2)))
 AI_OCR_TIMEOUT = max(10, min(120, int(os.getenv("AI_OCR_TIMEOUT", "45") or 45)))
 AI_RESUME_PARSE_TIMEOUT = max(10, min(120, int(os.getenv("AI_RESUME_PARSE_TIMEOUT", "35") or 35)))
 RESUME_PARSE_SOFT_TIMEOUT = max(20, min(180, int(os.getenv("RESUME_PARSE_SOFT_TIMEOUT", "70") or 70)))
+RESUME_PARSE_JOB_TTL = max(300, min(7200, int(os.getenv("RESUME_PARSE_JOB_TTL", "1800") or 1800)))
 
 
 def load_tencent_job_sources() -> list:
@@ -125,6 +127,9 @@ DEFAULT_SYNC_END_DATE = "2026-08-18"
 DEFAULT_MIN_DEADLINE_DATE = "2026-08-18"
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+RESUME_PARSE_JOBS: dict[str, dict] = {}
+RESUME_PARSE_JOBS_LOCK = threading.Lock()
 
 KEYWORD_MAP = {
     "Python": ["python", "爬虫", "flask", "fastapi", "django"],
@@ -941,6 +946,133 @@ def parse_resume_with_external_api(file_info: dict, raw_text: str, fallback: dic
             return fallback
 
     return normalize_resume_ai_output(fallback)
+
+
+def build_resume_parse_result(file_name: str, mime_type: str, encoded: str, file_bytes: bytes, user_id: int, progress=None) -> dict:
+    started_at = time.monotonic()
+    file_id = resume_file_log_id(file_name)
+
+    def emit(phase_label: str, message: str) -> None:
+        if progress:
+            progress(phase_label, message)
+
+    print(f"[{utc_string()}] resume_parse_start user={user_id} file_id={file_id} mime={mime_type} size={len(file_bytes)}")
+    emit("提取文本", "正在提取文本；扫描版会自动尝试 OCR")
+    raw_text, used_ocr = extract_resume_text_for_parsing(file_name, mime_type, file_bytes)
+    elapsed_after_text = time.monotonic() - started_at
+    print(
+        f"[{utc_string()}] resume_parse_text_done user={user_id} file_id={file_id} "
+        f"used_ocr={int(used_ocr)} text_len={len(raw_text)} elapsed={elapsed_after_text:.2f}s"
+    )
+
+    fallback = analyze_resume_text(raw_text) if len(raw_text) >= 20 else empty_resume()
+    fallback["sourceFile"] = file_name
+
+    remaining_budget = RESUME_PARSE_SOFT_TIMEOUT - elapsed_after_text
+    if remaining_budget < 12:
+        emit("生成结果", "识别耗时较长，正在返回已提取的信息。")
+        print(f"[{utc_string()}] resume_parse_soft_timeout user={user_id} file_id={file_id} elapsed={elapsed_after_text:.2f}s")
+        parsed = fallback
+    else:
+        emit("结构化字段", "正在整理基础信息、教育经历、项目和能力标签。")
+        parsed = parse_resume_with_external_api(
+            {"fileName": file_name, "mimeType": mime_type, "base64": encoded},
+            raw_text,
+            fallback,
+            timeout=max(10, min(AI_RESUME_PARSE_TIMEOUT, int(remaining_budget))),
+        )
+    parsed["sourceFile"] = parsed.get("sourceFile") or file_name
+
+    has_content = resume_has_content(parsed)
+    print(
+        f"[{utc_string()}] resume_parse_done user={user_id} file_id={file_id} "
+        f"has_content={int(has_content)} elapsed={time.monotonic() - started_at:.2f}s"
+    )
+
+    if not has_content:
+        message = "未从这个文件识别出可写入字段。请换可复制文本的 PDF/DOCX，或接入 OCR/专用解析服务后再解析扫描版文件。"
+    elif used_ocr:
+        message = "已通过 OCR 识别扫描版简历并完成结构化，请检查字段准确性。"
+    elif len(raw_text) < 20:
+        message = "已得到解析结果，但本地文本提取很少；请重点检查字段准确性。"
+    else:
+        message = "简历解析完成，请选择覆盖当前字段或只填空字段。"
+
+    return {"resume": parsed, "rawText": raw_text[:20000], "message": message}
+
+
+def cleanup_resume_parse_jobs() -> None:
+    cutoff = now() - RESUME_PARSE_JOB_TTL
+    with RESUME_PARSE_JOBS_LOCK:
+        expired = [job_id for job_id, job in RESUME_PARSE_JOBS.items() if job.get("updatedAt", 0) < cutoff]
+        for job_id in expired:
+            RESUME_PARSE_JOBS.pop(job_id, None)
+
+
+def set_resume_parse_job(job_id: str, **changes) -> None:
+    with RESUME_PARSE_JOBS_LOCK:
+        job = RESUME_PARSE_JOBS.get(job_id)
+        if not job:
+            return
+        job.update(changes)
+        job["updatedAt"] = now()
+
+
+def serialize_resume_parse_job(job: dict) -> dict:
+    payload = {
+        "jobId": job["id"],
+        "status": job["status"],
+        "phaseLabel": job.get("phaseLabel", ""),
+        "message": job.get("message", ""),
+        "createdAt": utc_string(job.get("createdAt")),
+        "updatedAt": utc_string(job.get("updatedAt")),
+    }
+    if job["status"] == "done":
+        payload["result"] = job.get("result") or {}
+    if job["status"] == "error":
+        payload["error"] = job.get("error") or "server_error"
+    return payload
+
+
+def run_resume_parse_job(job_id: str, user_id: int, file_name: str, mime_type: str, encoded: str, file_bytes: bytes) -> None:
+    def progress(phase_label: str, message: str) -> None:
+        set_resume_parse_job(job_id, status="running", phaseLabel=phase_label, message=message)
+
+    try:
+        result = build_resume_parse_result(file_name, mime_type, encoded, file_bytes, user_id, progress)
+        set_resume_parse_job(
+            job_id,
+            status="done",
+            phaseLabel="解析完成",
+            message=result.get("message", "解析完成，请选择写入方式。"),
+            result=result,
+        )
+    except Exception as exc:
+        print(f"[{utc_string()}] resume_parse_job_failed job_id={job_id} file_id={resume_file_log_id(file_name)} error={type(exc).__name__}")
+        set_resume_parse_job(job_id, status="error", phaseLabel="解析失败", message="服务器处理失败，请稍后重试。", error="server_error")
+
+
+def create_resume_parse_job(user_id: int, file_name: str, mime_type: str, encoded: str, file_bytes: bytes) -> str:
+    cleanup_resume_parse_jobs()
+    job_id = secrets.token_urlsafe(18)
+    created_at = now()
+    with RESUME_PARSE_JOBS_LOCK:
+        RESUME_PARSE_JOBS[job_id] = {
+            "id": job_id,
+            "userId": user_id,
+            "status": "queued",
+            "phaseLabel": "等待解析",
+            "message": "文件已上传，等待服务器开始解析。",
+            "createdAt": created_at,
+            "updatedAt": created_at,
+        }
+    thread = threading.Thread(
+        target=run_resume_parse_job,
+        args=(job_id, user_id, file_name, mime_type, encoded if RESUME_PARSE_SEND_FILE else "", file_bytes),
+        daemon=True,
+    )
+    thread.start()
+    return job_id
 
 
 def local_interview_report(job, answers: list[dict]) -> dict:
@@ -2136,6 +2268,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.handle_resume_analyze()
             elif method == "POST" and path == "/api/resume/parse-file":
                 self.handle_resume_parse_file()
+            elif method == "GET" and path.startswith("/api/resume/parse-jobs/"):
+                self.handle_resume_parse_job(path)
             elif method == "GET" and path == "/api/jobs":
                 self.handle_jobs()
             elif method == "GET" and path == "/api/applications":
@@ -2341,7 +2475,6 @@ class AppHandler(BaseHTTPRequestHandler):
         user = self.require_user()
         if not user:
             return
-        started_at = time.monotonic()
         body = self.read_json()
         file_name = (body.get("fileName") or "").strip()
         mime_type = (body.get("mimeType") or "application/octet-stream").strip()
@@ -2358,50 +2491,29 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "file_too_large"})
             return
 
-        print(
-            f"[{utc_string()}] resume_parse_start user={user['id']} file_id={resume_file_log_id(file_name)} "
-            f"mime={mime_type} size={len(file_bytes)}"
-        )
-        raw_text, used_ocr = extract_resume_text_for_parsing(file_name, mime_type, file_bytes)
-        elapsed_after_text = time.monotonic() - started_at
-        print(
-            f"[{utc_string()}] resume_parse_text_done user={user['id']} file_id={resume_file_log_id(file_name)} "
-            f"used_ocr={int(used_ocr)} text_len={len(raw_text)} elapsed={elapsed_after_text:.2f}s"
-        )
-        fallback = analyze_resume_text(raw_text) if len(raw_text) >= 20 else empty_resume()
-        fallback["sourceFile"] = file_name
-
-        remaining_budget = RESUME_PARSE_SOFT_TIMEOUT - elapsed_after_text
-        if remaining_budget < 12:
-            print(
-                f"[{utc_string()}] resume_parse_soft_timeout user={user['id']} file_id={resume_file_log_id(file_name)} "
-                f"elapsed={elapsed_after_text:.2f}s"
-            )
-            parsed = fallback
-        else:
-            parsed = parse_resume_with_external_api(
-                {"fileName": file_name, "mimeType": mime_type, "base64": encoded},
-                raw_text,
-                fallback,
-                timeout=max(10, min(AI_RESUME_PARSE_TIMEOUT, int(remaining_budget))),
-            )
-        parsed["sourceFile"] = parsed.get("sourceFile") or file_name
-        print(
-            f"[{utc_string()}] resume_parse_done user={user['id']} file_id={resume_file_log_id(file_name)} "
-            f"has_content={int(resume_has_content(parsed))} elapsed={time.monotonic() - started_at:.2f}s"
+        job_id = create_resume_parse_job(user["id"], file_name, mime_type, encoded, file_bytes)
+        self.send_json(
+            202,
+            {
+                "ok": True,
+                "jobId": job_id,
+                "status": "queued",
+                "message": "文件已上传，后台正在解析。",
+            },
         )
 
-        if not resume_has_content(parsed):
-            message = "未从这个文件识别出可写入字段。请换可复制文本的 PDF/DOCX，或接入 OCR/专用解析服务后再解析扫描版文件。"
-        elif used_ocr:
-            message = "已通过 OCR 识别扫描版简历并完成结构化，请检查字段准确性。"
-        elif len(raw_text) < 20:
-            message = "已得到解析结果，但本地文本提取很少；请重点检查字段准确性。"
-        else:
-            message = "简历解析完成，请选择覆盖当前字段或只填空字段。"
-
-        response_raw_text = raw_text[:20000]
-        self.send_json(200, {"resume": parsed, "rawText": response_raw_text, "message": message})
+    def handle_resume_parse_job(self, path: str) -> None:
+        user = self.require_user()
+        if not user:
+            return
+        job_id = urllib.parse.unquote(path.rsplit("/", 1)[-1])
+        cleanup_resume_parse_jobs()
+        with RESUME_PARSE_JOBS_LOCK:
+            job = dict(RESUME_PARSE_JOBS.get(job_id) or {})
+        if not job or job.get("userId") != user["id"]:
+            self.send_json(404, {"error": "parse_job_not_found"})
+            return
+        self.send_json(200, serialize_resume_parse_job(job))
 
     def handle_jobs(self) -> None:
         query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)

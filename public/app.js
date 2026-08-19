@@ -83,6 +83,10 @@ const App = {
     return labels[error] || error || "请求失败";
   },
 
+  sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  },
+
   async loadData() {
     const status = await this.api("/api/system/status");
     this.state.systemStatus = status;
@@ -1052,7 +1056,7 @@ const App = {
         detail: "正在上传文件",
         percent: 0,
       });
-      const data = await this.apiJsonWithUploadProgress(
+      let data = await this.apiJsonWithUploadProgress(
         "/api/resume/parse-file",
         { fileName: file.name, mimeType: file.type || "application/octet-stream", base64 },
         (progress) => {
@@ -1071,6 +1075,14 @@ const App = {
           });
         }
       );
+      if (data.jobId) {
+        this.updateParseProgress({
+          phaseLabel: "等待解析",
+          detail: data.message || "文件已上传，等待服务器开始解析。",
+          percent: null,
+        });
+        data = await this.waitResumeParseJob(data.jobId);
+      }
       this.state.resume = currentDraft;
       this.state.pendingParse = {
         resume: data.resume,
@@ -1088,6 +1100,29 @@ const App = {
     } finally {
       input.value = "";
     }
+  },
+
+  async waitResumeParseJob(jobId) {
+    const startedAt = Date.now();
+    for (let attempt = 0; attempt < 240; attempt += 1) {
+      await this.sleep(attempt < 6 ? 1000 : 2000);
+      const data = await this.api(`/api/resume/parse-jobs/${encodeURIComponent(jobId)}`);
+      if (data.status === "done") {
+        return data.result || {};
+      }
+      if (data.status === "error") {
+        throw new Error(data.message || this.formatApiError(data.error || "server_error"));
+      }
+      this.updateParseProgress({
+        phaseLabel: data.phaseLabel || (data.status === "queued" ? "等待解析" : "解析中"),
+        detail: data.message || "服务器正在解析简历。",
+        percent: null,
+      });
+      if (Date.now() - startedAt > 8 * 60 * 1000) {
+        throw new Error("解析等待超时，请稍后重试。");
+      }
+    }
+    throw new Error("解析等待超时，请稍后重试。");
   },
 
   renderParseModal() {
