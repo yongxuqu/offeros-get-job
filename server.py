@@ -393,7 +393,7 @@ def job_source_update_date(description: str, fallback_ts=None) -> str:
     match = re.search(r"(?:^|\n)更新[：:]\s*(\d{4}-\d{2}-\d{2})", str(description or ""))
     if match:
         return match.group(1)
-    return utc_string(fallback_ts)[:10] if fallback_ts else ""
+    return ""
 
 
 def row_to_job(row: sqlite3.Row) -> dict:
@@ -3006,10 +3006,26 @@ class AppHandler(BaseHTTPRequestHandler):
             )
             values.extend([like, like, like, like, like, like, like, like])
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        facet_clauses = []
+        facet_values = []
+        if batch and batch != "all":
+            facet_clauses.append("batch = ?")
+            facet_values.append(batch)
+        if keyword:
+            facet_clauses.append(
+                "(company LIKE ? OR title LIKE ? OR city LIKE ? OR category LIKE ? OR company_type LIKE ? OR batch LIKE ? OR description LIKE ? OR requirements LIKE ?)"
+            )
+            facet_values.extend([like, like, like, like, like, like, like, like])
+        facet_where_sql = f"WHERE {' AND '.join(facet_clauses)}" if facet_clauses else ""
         update_date_expr = (
             "CASE WHEN description LIKE '更新：____-__-__%' "
             "THEN substr(description, 4, 10) "
             "ELSE strftime('%Y-%m-%d', updated_at, 'unixepoch', 'localtime') END"
+        )
+        source_update_date_expr = (
+            "CASE WHEN description LIKE '更新：____-__-__%' "
+            "THEN substr(description, 4, 10) "
+            "ELSE NULL END"
         )
         if sort_mode == "updated":
             order_sql = f"{update_date_expr} DESC, updated_at DESC, company ASC"
@@ -3023,6 +3039,28 @@ class AppHandler(BaseHTTPRequestHandler):
 
         with connect_db() as conn:
             total = conn.execute(f"SELECT COUNT(*) AS count FROM jobs {where_sql}", values).fetchone()["count"]
+            latest_source_date = conn.execute(
+                f"SELECT MAX({source_update_date_expr}) AS latest FROM jobs {where_sql}",
+                values,
+            ).fetchone()["latest"]
+            cities = [
+                row["city"]
+                for row in conn.execute(
+                    f"SELECT DISTINCT city FROM jobs {facet_where_sql} AND city != '' ORDER BY city"
+                    if facet_where_sql
+                    else "SELECT DISTINCT city FROM jobs WHERE city != '' ORDER BY city",
+                    facet_values,
+                ).fetchall()
+            ]
+            company_types = [
+                row["company_type"]
+                for row in conn.execute(
+                    f"SELECT DISTINCT company_type FROM jobs {facet_where_sql} AND company_type != '' ORDER BY company_type"
+                    if facet_where_sql
+                    else "SELECT DISTINCT company_type FROM jobs WHERE company_type != '' ORDER BY company_type",
+                    facet_values,
+                ).fetchall()
+            ]
             rows = conn.execute(
                 f"""
                 SELECT * FROM jobs
@@ -3043,6 +3081,9 @@ class AppHandler(BaseHTTPRequestHandler):
                     "returned": len(rows),
                     "hasMore": offset + len(rows) < total,
                     "sort": sort_mode,
+                    "latestSourceDate": latest_source_date or "",
+                    "cities": cities,
+                    "companyTypes": company_types,
                 },
             },
         )

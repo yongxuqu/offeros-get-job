@@ -9,6 +9,8 @@ const App = {
     interviews: [],
     adminStats: null,
     jobsMeta: { total: 0, limit: 120, offset: 0, returned: 0, hasMore: false },
+    jobsPage: 1,
+    jobsPerPage: 120,
     query: "",
     category: "all",
     city: "all",
@@ -130,9 +132,11 @@ const App = {
 
   async loadJobs(reset = true) {
     const requestId = ++this.jobRequestId;
-    const offset = reset ? 0 : this.state.jobs.length;
+    const limit = this.state.jobsPerPage || 120;
+    const page = Math.max(1, Number(this.state.jobsPage) || 1);
+    const offset = (page - 1) * limit;
     const params = new URLSearchParams({
-      limit: "120",
+      limit: String(limit),
       offset: String(offset),
       batch: this.state.batch,
       sort: this.state.jobSort,
@@ -142,12 +146,12 @@ const App = {
     if (this.state.query.trim()) params.set("q", this.state.query.trim());
     const data = await this.api(`/api/jobs?${params.toString()}`);
     if (requestId !== this.jobRequestId) return false;
-    this.state.jobs = reset ? data.jobs : [...this.state.jobs, ...data.jobs];
+    this.state.jobs = data.jobs || [];
     this.state.jobsMeta = data.meta || {
       total: this.state.jobs.length,
-      limit: 120,
+      limit,
       offset,
-      returned: data.jobs.length,
+      returned: this.state.jobs.length,
       hasMore: false,
     };
     return true;
@@ -165,14 +169,7 @@ const App = {
   },
 
   async loadMoreJobs() {
-    try {
-      if (await this.loadJobs(false)) {
-        this.render();
-      }
-    } catch (error) {
-      this.setError(`加载更多失败：${error.message}`);
-      this.render();
-    }
+    this.goJobsPage((this.state.jobsPage || 1) + 1);
   },
 
   escape(value) {
@@ -333,7 +330,7 @@ const App = {
             ${
               isAdmin
                 ? `<div>后台管理</div><div>岗位库 / 用户统计 / 系统状态</div>`
-                : `<div>求职资料闭环</div><div>简历 / 岗位 / 投递 / 面试</div>`
+                : ""
             }
           </div>
         </aside>
@@ -712,10 +709,10 @@ const App = {
         <button class="btn primary" onclick="App.nav('resume')">完善简历</button>
       </section>
       <section class="grid cols-4">
-        <div class="metric"><span>简历完整度</span><strong>${completion}%</strong><small>结构化字段 + 能力标签</small></div>
-        <div class="metric"><span>可匹配岗位</span><strong>${jobTotal}</strong><small>真实岗位库</small></div>
-        <div class="metric"><span>投递记录</span><strong>${apps.length}</strong><small>收藏到 Offer 全流程</small></div>
-        <div class="metric"><span>面试报告</span><strong>${this.state.interviews.length}</strong><small>只存报告和总结</small></div>
+        <div class="metric"><span>简历完整度</span><strong>${completion}%</strong></div>
+        <div class="metric"><span>可匹配岗位</span><strong>${jobTotal}</strong></div>
+        <div class="metric"><span>投递记录</span><strong>${apps.length}</strong></div>
+        <div class="metric"><span>面试报告</span><strong>${this.state.interviews.length}</strong></div>
       </section>
       <div class="split" style="margin-top: 14px;">
         <section class="panel">
@@ -1275,8 +1272,6 @@ const App = {
             <div class="progress-bar ${percent === null ? "indeterminate" : ""}">
               <span style="width: ${percent === null ? 100 : percent}%"></span>
             </div>
-            <p class="muted">${this.escape(progress.detail || "")}</p>
-            <p class="muted">真实耗时：${progress.elapsedSeconds || 0}s</p>
           ` : `
             <p class="modal-result">${this.escape(progress.detail || "")}</p>
             ${done ? `
@@ -1511,11 +1506,13 @@ const App = {
   },
 
   renderJobs() {
-    const cities = ["all", ...new Set(this.state.jobs.map((job) => job.city))];
-    const companyTypes = ["all", ...new Set(this.state.jobs.map((job) => job.companyType || "未分类"))];
+    const meta = this.state.jobsMeta || {};
+    const cities = ["all", ...new Set([...(meta.cities || []), ...this.state.jobs.map((job) => job.city)].filter(Boolean))];
+    const companyTypes = ["all", ...new Set([...(meta.companyTypes || []), ...this.state.jobs.map((job) => job.companyType || "未分类")].filter(Boolean))];
     const jobs = this.sortJobs(this.filteredJobs());
     const companyGroups = this.companyGroups(jobs);
-    const total = this.state.jobsMeta?.total ?? jobs.length;
+    const total = meta.total ?? jobs.length;
+    const latestUpdate = meta.latestSourceDate || this.latestJobUpdateDate(this.state.jobs);
     const selectedCompany = this.state.selectedCompanyKey
       ? companyGroups.find((group) => group.key === this.state.selectedCompanyKey)
       : null;
@@ -1523,7 +1520,7 @@ const App = {
       <section class="section-title">
         <div>
           <h2>岗位匹配</h2>
-          <p>按能力匹配、城市、批次和企业类型筛选，已加载 ${this.state.jobs.length}/${total} 条，去投递会打开官方校招链接。</p>
+          <p>最新更新：${this.escape(latestUpdate || "暂无")} · 当前显示 ${jobs.length}/${total} 条，去投递会打开官方校招链接。</p>
           <div class="batch-tabs">
             ${["27届秋招", "实习", "26届春招"].map((item) => `
               <button class="pill-button ${this.state.batch === item ? "active" : ""}" onclick="App.setBatch('${item}')">
@@ -1533,7 +1530,7 @@ const App = {
           </div>
         </div>
       </section>
-      <section class="panel">
+      <section class="panel" id="jobs-panel">
         <div class="toolbar">
           <input id="job-search" value="${this.escape(this.state.query)}" placeholder="搜索公司、岗位、城市、能力、企业类型" oncompositionstart="App.startQueryComposition()" oncompositionend="App.endQueryComposition(this.value)" oninput="App.setQuery(this.value)" />
           <select onchange="App.setCity(this.value)">
@@ -1555,13 +1552,40 @@ const App = {
   renderJobsPager() {
     const meta = this.state.jobsMeta || {};
     const total = meta.total ?? this.state.jobs.length;
-    if (!meta.hasMore) return "";
+    const limit = meta.limit || this.state.jobsPerPage || 120;
+    const pageCount = Math.max(1, Math.ceil(total / limit));
+    if (pageCount <= 1) return "";
+    const current = Math.min(Math.max(1, this.state.jobsPage || 1), pageCount);
+    const pages = this.jobsPageItems(current, pageCount);
     return `
       <div class="pager-row">
-        <span>已加载 ${this.state.jobs.length}/${total} 条</span>
-        <button class="btn small" onclick="App.loadMoreJobs()">加载更多</button>
+        <span>第 ${current}/${pageCount} 页 · 共 ${total} 条</span>
+        <div class="pager-buttons">
+          <button class="btn small" ${current <= 1 ? "disabled" : `onclick="App.goJobsPage(${current - 1})"`}>上一页</button>
+          ${pages
+            .map((page) =>
+              page === "..."
+                ? `<span class="pager-ellipsis">...</span>`
+                : `<button class="btn small pager-button ${page === current ? "active" : ""}" ${page === current ? "disabled" : `onclick="App.goJobsPage(${page})"`}>${page}</button>`
+            )
+            .join("")}
+          <button class="btn small" ${current >= pageCount ? "disabled" : `onclick="App.goJobsPage(${current + 1})"`}>下一页</button>
+        </div>
       </div>
     `;
+  },
+
+  jobsPageItems(current, pageCount) {
+    if (pageCount <= 7) {
+      return Array.from({ length: pageCount }, (_, index) => index + 1);
+    }
+    const pages = new Set([1, pageCount, current - 1, current, current + 1]);
+    const sorted = [...pages].filter((page) => page >= 1 && page <= pageCount).sort((a, b) => a - b);
+    return sorted.reduce((items, page, index) => {
+      if (index > 0 && page - sorted[index - 1] > 1) items.push("...");
+      items.push(page);
+      return items;
+    }, []);
   },
 
   renderJobGrid(jobs) {
@@ -1569,9 +1593,10 @@ const App = {
   },
 
   jobUpdateDate(job) {
+    if (job.sourceDate) return String(job.sourceDate).slice(0, 10);
     const sourceDate = String(job.description || "").match(/(?:^|\n)更新[：:]\s*(\d{4}-\d{2}-\d{2})/);
     if (sourceDate) return sourceDate[1];
-    return job.updatedAt ? String(job.updatedAt).slice(0, 10) : "";
+    return "";
   },
 
   latestJobUpdateDate(jobs) {
@@ -1681,14 +1706,36 @@ const App = {
 
   setBatch(value) {
     this.state.batch = value;
+    this.state.jobsPage = 1;
     this.state.selectedCompanyKey = "";
     this.reloadJobs();
   },
 
   setJobSort(value) {
     this.state.jobSort = value;
+    this.state.jobsPage = 1;
     this.state.selectedCompanyKey = "";
     this.reloadJobs();
+  },
+
+  async goJobsPage(page) {
+    const meta = this.state.jobsMeta || {};
+    const limit = meta.limit || this.state.jobsPerPage || 120;
+    const total = meta.total ?? this.state.jobs.length;
+    const pageCount = Math.max(1, Math.ceil(total / limit));
+    const nextPage = Math.max(1, Math.min(Number(page) || 1, pageCount));
+    if (nextPage === this.state.jobsPage) return;
+    this.state.jobsPage = nextPage;
+    this.state.selectedCompanyKey = "";
+    try {
+      if (await this.loadJobs(true)) {
+        this.render();
+        requestAnimationFrame(() => document.querySelector("#jobs-panel")?.scrollIntoView({ block: "start" }));
+      }
+    } catch (error) {
+      this.setError(`岗位加载失败：${error.message}`);
+      this.render();
+    }
   },
 
   viewCompanyJobs(key) {
@@ -1710,6 +1757,7 @@ const App = {
 
   setQuery(value) {
     this.state.query = value;
+    this.state.jobsPage = 1;
     this.state.selectedCompanyKey = "";
     if (this.composingQuery) return;
     if (this.jobSearchTimer) clearTimeout(this.jobSearchTimer);
@@ -1728,18 +1776,21 @@ const App = {
 
   setCategory(value) {
     this.state.category = value;
+    this.state.jobsPage = 1;
     this.state.selectedCompanyKey = "";
     this.render();
   },
 
   setCity(value) {
     this.state.city = value;
+    this.state.jobsPage = 1;
     this.state.selectedCompanyKey = "";
     this.reloadJobs();
   },
 
   setCompanyType(value) {
     this.state.companyType = value;
+    this.state.jobsPage = 1;
     this.state.selectedCompanyKey = "";
     this.reloadJobs();
   },
@@ -1931,7 +1982,6 @@ const App = {
       <section class="section-title">
         <div>
           <h2>AI 语音模拟面试</h2>
-          <p>不保存音视频原件。语音转写用于生成报告，默认只留总结。</p>
         </div>
       </section>
       <section class="interview-board">
@@ -2566,19 +2616,13 @@ const App = {
         <section class="section-title">
           <div>
             <h2>账号与数据</h2>
-            <p>管理账号数据与导出备份。</p>
           </div>
         </section>
         <section class="panel">
-          <div class="grid cols-3">
-            <div class="metric"><span>账号</span><strong>${this.escape(this.state.user.email.split("@")[0])}</strong><small>邮箱验证码登录</small></div>
-            <div class="metric"><span>资料范围</span><strong>求职资料</strong><small>简历、投递和面试报告</small></div>
-            <div class="metric"><span>语音数据</span><strong>不保留原件</strong><small>只保存报告和总结</small></div>
-          </div>
-          <div class="toolbar" style="margin-top: 16px;">
+          <div class="metric"><span>账号</span><strong>${this.escape(this.state.user.email.split("@")[0])}</strong><small>邮箱验证码登录</small></div>
+          <div class="toolbar" style="margin-top: 16px; margin-bottom: 0;">
             <button class="btn primary" onclick="App.exportData()">导出数据</button>
           </div>
-          <textarea id="export-box" placeholder="导出的 JSON 会显示在这里。"></textarea>
         </section>
         ${this.renderLegalSettingsPanel()}
       `;
@@ -2643,7 +2687,16 @@ const App = {
 
   async exportData() {
     const data = await this.api("/api/export");
-    document.querySelector("#export-box").value = JSON.stringify(data, null, 2);
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `offeros-data-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    this.setNotice("数据导出已开始下载。");
   },
 };
 
