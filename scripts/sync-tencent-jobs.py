@@ -18,6 +18,12 @@ def main() -> None:
     parser.add_argument("--min-deadline", default=server.DEFAULT_MIN_DEADLINE_DATE)
     parser.add_argument("--import", dest="do_import", action="store_true")
     parser.add_argument("--output", help="Write the collected jobs snapshot JSON to this path.")
+    parser.add_argument("--skipped-output", help="Write skipped source rows to this JSON path.")
+    parser.add_argument(
+        "--skipped-reason",
+        default="",
+        help="Only write skipped rows with this reason. Leave empty to write all skipped rows.",
+    )
     args = parser.parse_args()
 
     today = datetime.date.today()
@@ -40,7 +46,7 @@ def main() -> None:
         min_deadline = args.min_deadline
 
     server.init_db()
-    result = server.collect_tencent_jobs(start_date, end_date, min_deadline)
+    result = server.collect_tencent_jobs(start_date, end_date, min_deadline, include_skipped_rows=bool(args.skipped_output))
     imported = 0
     if args.do_import:
         with server.connect_db() as conn:
@@ -67,11 +73,34 @@ def main() -> None:
             encoding="utf-8",
         )
 
+    if args.skipped_output:
+        skipped_rows = result.get("skippedRows") or []
+        if args.skipped_reason:
+            skipped_rows = [row for row in skipped_rows if row.get("reason") == args.skipped_reason]
+        skipped_path = Path(args.skipped_output)
+        skipped_path.parent.mkdir(parents=True, exist_ok=True)
+        skipped_path.write_text(
+            json.dumps(
+                {
+                    "name": "OfferOS Tencent skipped rows",
+                    "exportedAt": server.utc_string(),
+                    "summary": result["summary"],
+                    "reason": args.skipped_reason or "all",
+                    "count": len(skipped_rows),
+                    "rows": skipped_rows,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
     print(
         json.dumps(
             {
                 "imported": imported,
                 "output": args.output or "",
+                "skippedOutput": args.skipped_output or "",
                 "summary": result["summary"],
                 "sample": [
                     {

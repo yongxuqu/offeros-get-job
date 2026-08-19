@@ -1950,6 +1950,57 @@ def deadline_is_valid(value, min_deadline) -> bool:
     return not parsed or parsed >= min_deadline
 
 
+TENCENT_COMMENTARY_MARKERS = (
+    "未检索到相关资料",
+    "应届生",
+    "薪资",
+    "起薪",
+    "年薪",
+    "月薪",
+    "待遇",
+    "晋升",
+    "成长路径",
+    "职业路径",
+    "团队氛围",
+    "氛围",
+    "同事",
+    "内耗",
+    "稳定性",
+    "业务稳",
+    "福利",
+)
+
+
+def tencent_text_looks_like_commentary(value) -> bool:
+    text = clean_text(value)
+    if not text:
+        return False
+    marker_count = sum(1 for marker in TENCENT_COMMENTARY_MARKERS if marker in text)
+    if marker_count >= 2:
+        return True
+    return bool(re.search(r"(薪资|起薪|年薪|月薪|待遇).{0,30}(晋升|成长|氛围|同事|稳定|福利|内耗)", text))
+
+
+def tencent_skipped_row_summary(source: dict, row: dict, reason: str) -> dict:
+    normalized = normalize_csv_row(row)
+    return {
+        "reason": reason,
+        "source": source["name"],
+        "rowId": row.get("_rowId", ""),
+        "date": normalized.get("sourceDate") or row.get("日期") or row.get("更新/开启时间") or "",
+        "company": clean_text(normalized.get("company")),
+        "batchRaw": clean_text(normalized.get("batch")),
+        "batch": normalize_job_batch(normalized.get("batch") or ""),
+        "city": clean_text(normalized.get("city")),
+        "category": clean_text(normalized.get("category")),
+        "companyType": clean_text(normalized.get("companyType")),
+        "deadline": clean_text(normalized.get("deadline")),
+        "title": clean_text(normalized.get("title")),
+        "sourceUrl": first_url(normalized.get("sourceUrl")),
+        "announcementUrl": first_url(normalized.get("announcementUrl")),
+    }
+
+
 def tencent_row_to_job(row: dict, start_date, end_date, min_deadline):
     normalized = normalize_csv_row(row)
     source_date = normalized.get("sourceDate") or row.get("日期") or row.get("更新/开启时间")
@@ -1976,9 +2027,10 @@ def tencent_row_to_job(row: dict, start_date, end_date, min_deadline):
         return None, "缺投递/公告链接"
 
     positions = clean_text(normalized.get("title"))
+    if tencent_text_looks_like_commentary(positions):
+        positions = ""
     industry = clean_text(normalized.get("category")) or "未分类"
     target = clean_text(normalized.get("target"))
-    note = clean_text(normalized.get("description"))
     raw_batch = clean_text(normalized.get("batch"))
     deadline_text = iso_date(deadline) or "尽快投递"
 
@@ -1991,8 +2043,6 @@ def tencent_row_to_job(row: dict, start_date, end_date, min_deadline):
         description_parts.append(f"对象：{target}")
     if positions:
         description_parts.append(f"招聘岗位：{positions}")
-    if note:
-        description_parts.append(f"备注：{note}")
     if delivery_url and delivery_url != source_url:
         description_parts.append(f"投递：{delivery_url}")
     if announcement_url and announcement_url != source_url:
@@ -2063,7 +2113,7 @@ def merge_tencent_jobs(jobs: list) -> list:
     return list(merged.values())
 
 
-def collect_tencent_jobs(start_date=None, end_date=None, min_deadline=None) -> dict:
+def collect_tencent_jobs(start_date=None, end_date=None, min_deadline=None, include_skipped_rows: bool = False) -> dict:
     start = parse_date_value(start_date or DEFAULT_SYNC_START_DATE)
     end = parse_date_value(end_date or DEFAULT_SYNC_END_DATE)
     deadline_floor = parse_date_value(min_deadline or DEFAULT_MIN_DEADLINE_DATE)
@@ -2073,6 +2123,7 @@ def collect_tencent_jobs(start_date=None, end_date=None, min_deadline=None) -> d
     scanned = 0
     jobs = []
     skipped = {}
+    skipped_rows = []
     source_stats = []
     for source in TENCENT_JOB_SOURCES:
         rows = parse_tencent_source_rows(source)
@@ -2087,6 +2138,8 @@ def collect_tencent_jobs(start_date=None, end_date=None, min_deadline=None) -> d
             else:
                 skipped[reason] = skipped.get(reason, 0) + 1
                 source_skipped[reason] = source_skipped.get(reason, 0) + 1
+                if include_skipped_rows:
+                    skipped_rows.append(tencent_skipped_row_summary(source, row, reason))
         source_stats.append(
             {
                 "name": source["name"],
@@ -2098,7 +2151,7 @@ def collect_tencent_jobs(start_date=None, end_date=None, min_deadline=None) -> d
         )
 
     merged_jobs = merge_tencent_jobs(jobs)
-    return {
+    result = {
         "jobs": merged_jobs,
         "summary": {
             "startDate": start.isoformat(),
@@ -2112,6 +2165,9 @@ def collect_tencent_jobs(start_date=None, end_date=None, min_deadline=None) -> d
             "sources": source_stats,
         },
     }
+    if include_skipped_rows:
+        result["skippedRows"] = skipped_rows
+    return result
 
 
 def format_list_items(items: list, fields: list) -> str:
