@@ -27,6 +27,8 @@ const App = {
     error: "",
     notice: "",
     toast: null,
+    legalModal: null,
+    legalAccepted: false,
   },
   parseTimer: null,
   toastTimer: null,
@@ -86,6 +88,7 @@ const App = {
       smtp_not_configured: "验证码邮件服务未配置。",
       invalid_file_data: "文件读取失败，请重新选择文件。",
       file_required: "请先选择一份简历文件。",
+      accepted_terms_required: "请先同意《用户协议》和《隐私政策》。",
       server_error: "服务器处理失败，请稍后重试。",
     };
     return labels[error] || error || "请求失败";
@@ -214,6 +217,15 @@ const App = {
             <label>验证码</label>
             <input id="code" placeholder="6 位数字" inputmode="numeric" />
           </div>
+          <div class="legal-consent">
+            <input type="checkbox" id="legal-consent" ${this.state.legalAccepted ? "checked" : ""} onchange="App.syncLegalConsent(this)" />
+            <span>
+              我已阅读并同意
+              <button type="button" class="text-link" onclick="App.openLegalDoc('terms')">《用户协议》</button>
+              和
+              <button type="button" class="text-link" onclick="App.openLegalDoc('privacy')">《隐私政策》</button>
+            </span>
+          </div>
           <div class="toolbar" style="margin-top: 14px;">
             <button class="btn primary" onclick="App.verifyCode()">进入工作台</button>
           </div>
@@ -221,6 +233,7 @@ const App = {
           <div id="auth-feedback"></div>
         </section>
       </main>
+      ${this.renderLegalModal()}
     `;
   },
 
@@ -231,6 +244,10 @@ const App = {
 
   async sendCode() {
     const email = document.querySelector("#email").value.trim();
+    if (!this.hasAcceptedLegalTerms()) {
+      this.authFeedback("请先勾选同意《用户协议》和《隐私政策》。", "error");
+      return;
+    }
     try {
       await this.api("/api/auth/send-code", {
         method: "POST",
@@ -245,10 +262,14 @@ const App = {
   async verifyCode() {
     const email = document.querySelector("#email").value.trim();
     const code = document.querySelector("#code").value.trim();
+    if (!this.hasAcceptedLegalTerms()) {
+      this.authFeedback("请先勾选同意《用户协议》和《隐私政策》。", "error");
+      return;
+    }
     try {
       const data = await this.api("/api/auth/verify", {
         method: "POST",
-        body: JSON.stringify({ email, code }),
+        body: JSON.stringify({ email, code, acceptedTerms: true }),
       });
       this.state.user = data.user;
       await this.loadData();
@@ -326,8 +347,88 @@ const App = {
       </div>
       ${this.renderToast()}
       ${this.renderParseModal()}
+      ${this.renderLegalModal()}
     `;
     this.restoreActiveElement(active);
+  },
+
+  syncLegalConsent(input) {
+    this.state.legalAccepted = Boolean(input?.checked);
+  },
+
+  hasAcceptedLegalTerms() {
+    const input = document.querySelector("#legal-consent");
+    if (input) this.state.legalAccepted = Boolean(input.checked);
+    return Boolean(this.state.legalAccepted);
+  },
+
+  legalDocument(type) {
+    const docs = {
+      terms: {
+        title: "用户协议",
+        updatedAt: "2026-08-20",
+        sections: [
+          ["服务范围", "OfferOS 提供简历结构化、岗位信息聚合、投递进程管理、插件填表辅助和 AI 面试报告等工具能力。岗位信息来自公开招聘页面、在线表格或后台录入，平台会尽量清洗和去重，但不承诺信息完整、实时或绝对准确。"],
+          ["账号使用", "当前仅支持邮箱验证码登录。你需要对自己的账号使用行为负责，不得批量抓取、攻击服务、绕过权限或上传违法、侵权、虚假内容。"],
+          ["求职行为", "平台展示的岗位入口仅作为求职辅助。是否投递、填写何种内容、是否参加测评或面试，由你自行判断和承担结果。"],
+          ["AI 输出", "简历解析、能力标签和面试报告由程序和第三方模型辅助生成，可能存在遗漏或误判。正式提交前请自行核对所有字段。"],
+          ["服务变更", "MVP 阶段功能可能调整、下线或出现短时不可用。我们会尽量保持数据可用和服务稳定，但不对间接损失承担责任。"],
+        ],
+      },
+      privacy: {
+        title: "隐私政策",
+        updatedAt: "2026-08-20",
+        sections: [
+          ["我们收集什么", "为提供服务，我们会保存邮箱账号、结构化简历、岗位收藏和投递状态、AI 面试报告、插件连接令牌以及必要的系统日志。语音面试不保存音视频原件，只保存转写后用于报告生成的结果和报告摘要。"],
+          ["如何使用数据", "这些数据用于登录验证、简历解析、岗位匹配、投递看板、面试反馈、插件填表预览和基础运营统计。我们不会把你的简历公开展示给其他普通用户。"],
+          ["第三方服务", "邮箱验证码会通过已配置的发信邮箱服务发送；简历解析、OCR、语音转文字和面试报告可能调用第三方 AI/API 服务。调用时会传入完成任务所需的最少内容。"],
+          ["数据保存", "账号、简历、投递记录和报告会保存在服务端数据库中，便于你下次继续使用。系统会做数据库备份，备份仅用于故障恢复。"],
+          ["你的选择", "你可以在设置页导出自己的数据；如需删除账号或相关数据，可联系平台维护者处理。"],
+        ],
+      },
+    };
+    return docs[type] || docs.privacy;
+  },
+
+  openLegalDoc(type) {
+    this.state.legalModal = type;
+    this.render();
+  },
+
+  closeLegalDoc() {
+    this.state.legalModal = null;
+    this.render();
+  },
+
+  renderLegalModal() {
+    if (!this.state.legalModal) return "";
+    const doc = this.legalDocument(this.state.legalModal);
+    return `
+      <div class="modal-backdrop" role="dialog" aria-modal="true">
+        <section class="legal-modal">
+          <div class="modal-head">
+            <span class="modal-indicator ok"></span>
+            <div>
+              <h3>${this.escape(doc.title)}</h3>
+              <p>更新日期：${this.escape(doc.updatedAt)}</p>
+            </div>
+          </div>
+          <div class="legal-doc">
+            ${doc.sections
+              .map(([heading, body]) => `
+                <section>
+                  <h4>${this.escape(heading)}</h4>
+                  <p>${this.escape(body)}</p>
+                </section>
+              `)
+              .join("")}
+          </div>
+          <div class="toolbar legal-actions">
+            <button class="btn primary" onclick="App.closeLegalDoc()">知道了</button>
+          </div>
+        </section>
+      </div>
+    `;
   },
 
   captureActiveElement() {
@@ -1112,9 +1213,25 @@ const App = {
 
   async waitResumeParseJob(jobId) {
     const startedAt = Date.now();
+    let transientFailures = 0;
     for (let attempt = 0; attempt < 240; attempt += 1) {
       await this.sleep(attempt < 6 ? 1000 : 2000);
-      const data = await this.api(`/api/resume/parse-jobs/${encodeURIComponent(jobId)}`);
+      let data = {};
+      try {
+        data = await this.api(`/api/resume/parse-jobs/${encodeURIComponent(jobId)}`);
+        transientFailures = 0;
+      } catch (error) {
+        transientFailures += 1;
+        if (transientFailures <= 3) {
+          this.updateParseProgress({
+            phaseLabel: "等待解析",
+            detail: "解析仍在进行，正在重试获取结果。",
+            percent: null,
+          });
+          continue;
+        }
+        throw error;
+      }
       if (data.status === "done") {
         return data.result || {};
       }
@@ -2463,6 +2580,7 @@ const App = {
           </div>
           <textarea id="export-box" placeholder="导出的 JSON 会显示在这里。"></textarea>
         </section>
+        ${this.renderLegalSettingsPanel()}
       `;
     }
     const statusRows = [
@@ -2502,6 +2620,22 @@ const App = {
           ${modelRows
             .map(([label, value]) => `<div class="status-row"><span>${this.escape(label)}</span><strong>${this.escape(value)}</strong></div>`)
             .join("")}
+        </div>
+      </section>
+      ${this.renderLegalSettingsPanel()}
+    `;
+  },
+
+  renderLegalSettingsPanel() {
+    return `
+      <section class="panel legal-panel">
+        <div>
+          <h3>协议与隐私</h3>
+          <p class="muted">查看服务边界、数据使用范围和第三方能力说明。</p>
+        </div>
+        <div class="toolbar">
+          <button class="btn" onclick="App.openLegalDoc('terms')">用户协议</button>
+          <button class="btn" onclick="App.openLegalDoc('privacy')">隐私政策</button>
         </div>
       </section>
     `;

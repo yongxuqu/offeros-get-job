@@ -239,6 +239,40 @@ select:focus {
   font-size: 12px;
 }
 
+.text-link {
+  display: inline;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.text-link:hover {
+  text-decoration: underline;
+}
+
+.legal-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.legal-consent input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  margin-top: 3px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .batch-tabs {
   display: flex;
   gap: 8px;
@@ -327,6 +361,51 @@ select:focus {
     linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025)),
     #0c0f15;
   box-shadow: 0 24px 120px rgba(0, 0, 0, 0.65);
+}
+
+.legal-modal {
+  width: min(680px, 100%);
+  max-height: min(760px, calc(100vh - 36px));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025)),
+    #0c0f15;
+  box-shadow: 0 24px 120px rgba(0, 0, 0, 0.65);
+}
+
+.legal-doc {
+  overflow: auto;
+  display: grid;
+  gap: 14px;
+  padding-right: 4px;
+}
+
+.legal-doc section {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 13px 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.legal-doc h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.legal-doc p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+.legal-actions {
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 
 .modal-head {
@@ -1083,6 +1162,23 @@ select:focus {
   color: var(--muted);
 }
 
+.legal-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.legal-panel h3 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+.legal-panel p {
+  margin: 0;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -1162,6 +1258,11 @@ th {
   .nav button {
     justify-content: center;
     font-size: 12px;
+  }
+
+  .legal-panel {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .main {

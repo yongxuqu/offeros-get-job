@@ -87,7 +87,7 @@ ADMIN_EMAILS = {item.strip().lower() for item in os.getenv("ADMIN_EMAILS", "").s
 MAX_RESUME_FILE_SIZE = 8 * 1024 * 1024
 MAX_JSON_BODY_SIZE = 16 * 1024 * 1024
 OCR_TEXT_THRESHOLD = max(20, int(os.getenv("OCR_TEXT_THRESHOLD", "120") or 120))
-OCR_MAX_PAGES = max(1, min(4, int(os.getenv("OCR_MAX_PAGES", "2") or 2)))
+OCR_MAX_PAGES = max(1, min(4, int(os.getenv("OCR_MAX_PAGES", "3") or 3)))
 AI_OCR_TIMEOUT = max(10, min(120, int(os.getenv("AI_OCR_TIMEOUT", "45") or 45)))
 AI_RESUME_PARSE_TIMEOUT = max(10, min(120, int(os.getenv("AI_RESUME_PARSE_TIMEOUT", "35") or 35)))
 RESUME_PARSE_SOFT_TIMEOUT = max(20, min(180, int(os.getenv("RESUME_PARSE_SOFT_TIMEOUT", "70") or 70)))
@@ -641,6 +641,17 @@ def clean_extracted_text(text: str) -> str:
     return text.strip()
 
 
+def resume_text_has_signal(text: str) -> bool:
+    clean = clean_extracted_text(text)
+    if len(clean) < 20:
+        return False
+    if re.search(r"1[3-9]\d{9}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", clean):
+        return True
+    tokens = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,}", clean)
+    keyword_hits = sum(1 for word in ("教育", "学校", "大学", "专业", "项目", "实习", "经历", "技能", "获奖", "证书") if word in clean)
+    return len(tokens) >= 18 and keyword_hits >= 2
+
+
 def resume_file_log_id(file_name: str) -> str:
     suffix = Path(file_name).suffix.lower()[:12] or ".file"
     digest = hashlib.sha256(file_name.encode("utf-8", errors="ignore")).hexdigest()[:10]
@@ -783,11 +794,11 @@ def extract_resume_text(file_name: str, mime_type: str, file_bytes: bytes) -> st
 
 def extract_resume_text_for_parsing(file_name: str, mime_type: str, file_bytes: bytes) -> tuple[str, bool]:
     raw_text = extract_resume_text(file_name, mime_type, file_bytes)
-    if len(raw_text) >= OCR_TEXT_THRESHOLD:
+    if len(raw_text) >= OCR_TEXT_THRESHOLD and resume_text_has_signal(raw_text):
         return raw_text, False
 
     ocr_text = extract_resume_text_with_ocr(file_name, mime_type, file_bytes)
-    if len(ocr_text) > len(raw_text):
+    if resume_text_has_signal(ocr_text) and len(ocr_text) > len(raw_text):
         return ocr_text, True
     return raw_text, False
 
@@ -876,6 +887,16 @@ def normalize_resume_ai_output(resume: dict) -> dict:
     return resume
 
 
+def choose_parsed_resume(parsed: dict, fallback: dict) -> dict:
+    normalized = normalize_resume_ai_output(parsed)
+    if resume_has_content(normalized):
+        return normalized
+    fallback = normalize_resume_ai_output(fallback)
+    if resume_has_content(fallback):
+        return fallback
+    return normalized
+
+
 def parse_resume_with_external_api(file_info: dict, raw_text: str, fallback: dict, timeout: int | None = None) -> dict:
     if RESUME_PARSE_API_URL:
         headers = {"Content-Type": "application/json"}
@@ -898,8 +919,8 @@ def parse_resume_with_external_api(file_info: dict, raw_text: str, fallback: dic
             )
             with urllib.request.urlopen(req, timeout=timeout or AI_RESUME_PARSE_TIMEOUT) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
-            return normalize_resume_ai_output(payload.get("resume") or payload)
-        except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as exc:
+            return choose_parsed_resume(payload.get("resume") or payload, fallback)
+        except Exception as exc:
             print(f"[{utc_string()}] resume_external_parse_failed file_id={resume_file_log_id(file_info.get('fileName', ''))} error={type(exc).__name__}")
             return normalize_resume_ai_output(fallback)
 
@@ -953,10 +974,10 @@ def parse_resume_with_external_api(file_info: dict, raw_text: str, fallback: dic
             with urllib.request.urlopen(req, timeout=timeout or AI_RESUME_PARSE_TIMEOUT) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
             content = payload["choices"][0]["message"]["content"]
-            return normalize_resume_ai_output(parse_json_object(content))
-        except (urllib.error.URLError, KeyError, json.JSONDecodeError, TimeoutError) as exc:
+            return choose_parsed_resume(parse_json_object(content), fallback)
+        except Exception as exc:
             print(f"[{utc_string()}] resume_ai_parse_failed file_id={resume_file_log_id(file_info.get('fileName', ''))} error={type(exc).__name__}")
-            return fallback
+            return normalize_resume_ai_output(fallback)
 
     return normalize_resume_ai_output(fallback)
 
@@ -2787,6 +2808,9 @@ class AppHandler(BaseHTTPRequestHandler):
         body = self.read_json()
         email_addr = (body.get("email") or "").strip().lower()
         code = (body.get("code") or "").strip()
+        if body.get("acceptedTerms") is not True:
+            self.send_json(400, {"error": "accepted_terms_required"})
+            return
         if not EMAIL_RE.match(email_addr):
             self.send_json(400, {"error": "invalid_email"})
             return
