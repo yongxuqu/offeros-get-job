@@ -17,6 +17,7 @@ def main() -> None:
     parser.add_argument("--yesterday", action="store_true", help="Sync yesterday based on server local date.")
     parser.add_argument("--min-deadline", default=server.DEFAULT_MIN_DEADLINE_DATE)
     parser.add_argument("--import", dest="do_import", action="store_true")
+    parser.add_argument("--output", help="Write the collected jobs snapshot JSON to this path.")
     args = parser.parse_args()
 
     today = datetime.date.today()
@@ -48,10 +49,29 @@ def main() -> None:
                 server.upsert_job(conn, job)
                 imported += 1
 
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(
+                {
+                    "name": "OfferOS Tencent jobs snapshot",
+                    "exportedAt": server.utc_string(),
+                    "summary": result["summary"],
+                    "count": len(result["jobs"]),
+                    "jobs": result["jobs"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
     print(
         json.dumps(
             {
                 "imported": imported,
+                "output": args.output or "",
                 "summary": result["summary"],
                 "sample": [
                     {

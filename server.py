@@ -1275,17 +1275,30 @@ def clean_url(value) -> str:
         return ""
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return ""
+    path = strip_tencent_url_tail(parsed.path)
+    fragment = strip_tencent_url_tail(parsed.fragment)
     if parsed.query:
         query_items = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
         query_items = [
             (key, val)
             for key, val in query_items
-            if val.strip() or key.lower() not in {"sessionid", "session_id"}
+            if key.lower() not in {"sessionid", "session_id"}
         ]
         url = urllib.parse.urlunsplit(
-            parsed._replace(query=urllib.parse.urlencode(query_items, doseq=True))
+            parsed._replace(path=path, query=urllib.parse.urlencode(query_items, doseq=True), fragment=fragment)
         )
+    else:
+        url = urllib.parse.urlunsplit(parsed._replace(path=path, fragment=fragment))
     return url
+
+
+def strip_tencent_url_tail(value: str) -> str:
+    text = value or ""
+    lower = text.lower()
+    for suffix in ("jobslisth", "jobsh", "campush", "positionh", "posth", ".htmlh"):
+        if lower.endswith(suffix):
+            return text[:-1]
+    return text
 
 
 def first_url(*values) -> str:
@@ -1681,38 +1694,152 @@ def decode_tencent_pool_entry(data: bytes) -> dict:
         return entry
 
     texts = []
-    urls = []
+    preferred_urls = []
+    fallback_urls = []
+
+    def add_url(target: list, value: str) -> None:
+        found = clean_url(value)
+        if found and found not in preferred_urls and found not in fallback_urls:
+            target.append(found)
+
     for field_no, wire_type, value in fields:
         if wire_type != 2:
             continue
         decoded = value.decode("utf-8", "ignore")
-        found_url = clean_url(decoded)
-        if found_url:
-            urls.append(found_url)
 
         if field_no in (1, 3):
             text_value = clean_text(decode_text_container(value))
             if text_value and "Helvetica" not in text_value and "FFFF" not in text_value:
                 texts.append(text_value)
+            add_url(fallback_urls, decoded)
 
         try:
+            preferred_count = len(preferred_urls)
             for sub_no, sub_wire, sub_value in parse_proto_fields(value):
                 if sub_wire != 2:
                     continue
                 sub_decoded = sub_value.decode("utf-8", "ignore")
-                found_url = clean_url(sub_decoded)
-                if found_url:
-                    urls.append(found_url)
+                if field_no == 7 and sub_no == 11:
+                    add_url(preferred_urls, sub_decoded)
+                else:
+                    add_url(fallback_urls, sub_decoded)
                 if sub_no in (1, 3):
                     text_value = clean_text(decode_text_container(sub_value))
                     if text_value and "Helvetica" not in text_value and "FFFF" not in text_value:
                         texts.append(text_value)
+            if field_no == 7 and len(preferred_urls) == preferred_count:
+                add_url(fallback_urls, decoded)
         except ValueError:
-            pass
+            if field_no == 7:
+                add_url(fallback_urls, decoded)
 
+    urls = preferred_urls + fallback_urls
     entry["url"] = urls[0] if urls else ""
     entry["text"] = texts[-1] if texts else ""
     return entry
+
+
+TENCENT_LINK_ACTION_MARKERS = ("投递", "报名", "网申", "方式", "渠道", "查看")
+
+
+def tencent_link_text_is_url(value: str) -> bool:
+    return bool(re.match(r"^(?:https?://|www\.)", clean_text(value), re.I))
+
+
+def tencent_link_text_is_action(value: str) -> bool:
+    text = clean_text(value)
+    return any(marker in text for marker in TENCENT_LINK_ACTION_MARKERS)
+
+
+def tencent_company_key(value: str) -> str:
+    text = clean_text(value).lower()
+    text = re.sub(r"[（(].*?[）)]", "", text)
+    text = re.split(r"[-－—–·•｜|]", text, maxsplit=1)[0]
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", text)
+
+
+def tencent_company_matches(company: str, link_text: str) -> bool:
+    company_key = tencent_company_key(company)
+    link_key = tencent_company_key(link_text)
+    if not company_key or not link_key:
+        return False
+    if company_key == link_key:
+        return True
+    if min(len(company_key), len(link_key)) <= 2:
+        return False
+    return company_key in link_key or link_key in company_key
+
+
+def assign_tencent_sheet_links(rows: list, value_pool: list) -> None:
+    links = [
+        item
+        for item in value_pool
+        if item.get("url") and not tencent_link_text_is_url(item.get("text", ""))
+    ]
+    row_numbers = []
+    row_candidates = []
+    for row in rows:
+        try:
+            row_index = int(row.get("_rowId") or 0)
+        except (TypeError, ValueError):
+            row_index = 0
+        row_numbers.append(row_index)
+        company = row.get("企业/招聘单位名称", "")
+        candidates = []
+        for index, link in enumerate(links):
+            if tencent_link_text_is_action(link.get("text", "")):
+                continue
+            if abs(index - row_index * 2) > 900:
+                continue
+            if tencent_company_matches(company, link.get("text", "")):
+                candidates.append(index)
+        row_candidates.append(candidates)
+
+    def candidate_support(row_pos: int, anchor_index: int) -> int:
+        current_row = row_numbers[row_pos]
+        score = 0
+        for neighbor_pos in range(max(0, row_pos - 8), min(len(rows), row_pos + 9)):
+            if neighbor_pos == row_pos:
+                continue
+            row_delta = row_numbers[neighbor_pos] - current_row
+            if abs(row_delta) > 20:
+                continue
+            expected = anchor_index + row_delta * 2
+            if any(abs(candidate - expected) <= 6 for candidate in row_candidates[neighbor_pos]):
+                score += max(1, 8 - abs(row_delta))
+        return score
+
+    scored = []
+    for row_pos, candidates in enumerate(row_candidates):
+        for anchor_index in candidates:
+            support = candidate_support(row_pos, anchor_index)
+            if support > 0:
+                rough_distance = abs(anchor_index - row_numbers[row_pos] * 2)
+                scored.append((-support, rough_distance, row_pos, anchor_index))
+    scored.sort()
+
+    used_anchors = set()
+    assigned_rows = set()
+    for _, _, row_pos, anchor_index in scored:
+        if row_pos in assigned_rows or anchor_index in used_anchors:
+            continue
+        row = rows[row_pos]
+        if first_url(row.get("投递方式")) or first_url(row.get("官方招聘推文")):
+            row["投递方式"] = first_url(row.get("投递方式"))
+            row["官方招聘推文"] = first_url(row.get("官方招聘推文"))
+            continue
+
+        used_anchors.add(anchor_index)
+        announcement = links[anchor_index]
+        delivery = None
+        for index in range(anchor_index - 1, max(-1, anchor_index - 8), -1):
+            if tencent_link_text_is_action(links[index].get("text", "")):
+                delivery = links[index]
+                break
+
+        row["投递方式"] = (delivery or announcement).get("url", "")
+        row["官方招聘推文"] = announcement.get("url", "")
+        assigned_rows.add(row_pos)
 
 
 def parse_tencent_sheet_rows(source: dict, payload: dict) -> list:
@@ -1751,7 +1878,6 @@ def parse_tencent_sheet_rows(source: dict, payload: dict) -> list:
     numeric_values = [item["number"] for item in value_pool if item.get("number") is not None]
     numeric_index = 0
     table = {}
-    link_entries = [item for item in value_pool if item.get("url")]
 
     for message in cell_messages:
         row = 0
@@ -1803,25 +1929,7 @@ def parse_tencent_sheet_rows(source: dict, payload: dict) -> list:
         if mapped.get("企业/招聘单位名称"):
             data_rows.append(mapped)
 
-    link_index = 0
-    for row in data_rows:
-        row_links = []
-        while link_index < len(link_entries) and len(row_links) < 2:
-            row_links.append(link_entries[link_index])
-            link_index += 1
-        delivery = next(
-            (
-                item
-                for item in row_links
-                if any(marker in item.get("text", "") for marker in ("投递", "报名", "网申", "方式", "渠道"))
-            ),
-            row_links[0] if row_links else None,
-        )
-        announcement = next((item for item in row_links if item is not delivery), None)
-        if delivery and delivery.get("url"):
-            row["投递方式"] = delivery["url"]
-        if announcement and announcement.get("url"):
-            row["官方招聘推文"] = announcement["url"]
+    assign_tencent_sheet_links(data_rows, value_pool)
     return data_rows
 
 
@@ -1860,6 +1968,8 @@ def tencent_row_to_job(row: dict, start_date, end_date, min_deadline):
     delivery_url = first_url(normalized.get("sourceUrl"))
     announcement_url = first_url(normalized.get("announcementUrl"))
     source_url = delivery_url or announcement_url
+    if row.get("_sourceKind") == "sheet" and announcement_url:
+        source_url = announcement_url
     if not company:
         return None, "缺公司名称"
     if not source_url:
@@ -1883,6 +1993,8 @@ def tencent_row_to_job(row: dict, start_date, end_date, min_deadline):
         description_parts.append(f"招聘岗位：{positions}")
     if note:
         description_parts.append(f"备注：{note}")
+    if delivery_url and delivery_url != source_url:
+        description_parts.append(f"投递：{delivery_url}")
     if announcement_url and announcement_url != source_url:
         description_parts.append(f"公告：{announcement_url}")
 
