@@ -4,6 +4,10 @@ OfferOS is an open-source job-search operating system for early-career candidate
 
 This repository contains the open-source application code only. Production secrets, user data, uploaded resumes, SQLite databases, and real job-data snapshots are intentionally not included.
 
+## Hosted Version
+
+If you do not want to self-host OfferOS, you can use our hosted site: [https://www.offeros.top](https://www.offeros.top).
+
 ## Features
 
 - Email-code authentication with SMTP.
