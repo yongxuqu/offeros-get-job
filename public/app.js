@@ -26,6 +26,7 @@ const App = {
     pendingParse: null,
     parseProgress: null,
     manualJobModalOpen: false,
+    adminSubmissionDetailId: null,
     interview: null,
     recording: false,
     error: "",
@@ -93,6 +94,7 @@ const App = {
       invalid_file_data: "文件读取失败，请重新选择文件。",
       file_required: "请先选择一份简历文件。",
       job_requires_company_title_url: "请填写公司、岗位名称和官方链接。",
+      invalid_job_url: "请填写有效的公网官方链接，不能使用 localhost、内网地址或无效域名。",
       invalid_review_action: "审核操作无效。",
       submission_not_found: "这条提交记录不存在。",
       accepted_terms_required: "请先同意《用户协议》和《隐私政策》。",
@@ -354,6 +356,7 @@ const App = {
       ${this.renderToast()}
       ${this.renderParseModal()}
       ${this.renderManualJobModal()}
+      ${this.renderJobSubmissionDetailModal()}
       ${this.renderLegalModal()}
     `;
     this.restoreActiveElement(active);
@@ -2085,8 +2088,31 @@ const App = {
     }
   },
 
+  findJobSubmission(id) {
+    return (this.state.jobSubmissions || []).find((item) => Number(item.id) === Number(id));
+  },
+
+  openJobSubmissionDetail(id) {
+    this.state.adminSubmissionDetailId = Number(id);
+    this.render();
+  },
+
+  closeJobSubmissionDetail() {
+    this.state.adminSubmissionDetailId = null;
+    this.render();
+  },
+
   async reviewJobSubmission(id, action) {
-    const note = action === "reject" ? window.prompt("驳回原因（选填）") || "" : "";
+    const item = this.findJobSubmission(id);
+    const detailOpen = Number(this.state.adminSubmissionDetailId) === Number(id);
+    const note = detailOpen ? this.getInput("submission-review-note") : action === "reject" ? window.prompt("驳回原因（选填）") || "" : "";
+    if (action === "approve") {
+      const warnings = item?.warnings || [];
+      const message = warnings.length
+        ? `这条提交有 ${warnings.length} 个审核提醒，确认已经打开链接核对并通过？`
+        : "确认已经核对链接和字段，通过后进入全站岗位库？";
+      if (!window.confirm(message)) return;
+    }
     try {
       await this.api(`/api/admin/job-submissions/${id}/review`, {
         method: "POST",
@@ -2098,6 +2124,7 @@ const App = {
       ]);
       this.state.jobSubmissions = submissions.submissions || [];
       this.state.adminStats = stats.stats;
+      this.state.adminSubmissionDetailId = null;
       await this.loadJobs(true);
       this.setNotice(action === "approve" ? "已通过，岗位已进入公共岗位库。" : "已驳回，岗位不会进入公共岗位库。");
       this.render();
@@ -2572,6 +2599,104 @@ const App = {
     `;
   },
 
+  renderSubmissionValue(value) {
+    if (Array.isArray(value)) return value.filter(Boolean).join("、") || "-";
+    return String(value ?? "").trim() || "-";
+  },
+
+  renderJobSubmissionDetailModal() {
+    const id = this.state.adminSubmissionDetailId;
+    if (!id) return "";
+    const item = this.findJobSubmission(id);
+    if (!item) return "";
+    const job = item.job || {};
+    const payload = item.payload || {};
+    const statusLabels = {
+      pending: "待审核",
+      approved: "已通过",
+      rejected: "已驳回",
+    };
+    const fields = [
+      ["公司", job.company, payload.company],
+      ["岗位名称", job.title, payload.title],
+      ["批次", job.batch, payload.batch],
+      ["城市", job.city, payload.city],
+      ["岗位方向/行业", job.category, payload.category],
+      ["企业类型", job.companyType, payload.companyType],
+      ["截止日期", job.deadline, payload.deadline],
+      ["关键词", job.requirements, payload.requirements],
+    ];
+    const description = this.renderSubmissionValue(job.description || payload.description);
+    const warnings = item.warnings || [];
+    return `
+      <div class="modal-backdrop" role="dialog" aria-modal="true">
+        <section class="parse-modal submission-detail-modal">
+          <div class="modal-head">
+            <span class="modal-indicator ${warnings.length ? "warn" : "ok"}"></span>
+            <div>
+              <h3>提交详情</h3>
+              <p>${this.escape(item.submitter || "-")} · ${this.escape(item.createdAt || "-")} · ${this.escape(statusLabels[item.status] || item.status)}</p>
+            </div>
+          </div>
+
+          <div class="review-warning-box ${warnings.length ? "warn" : "ok"}">
+            <strong>${warnings.length ? "需要核对" : "基础校验通过"}</strong>
+            ${
+              warnings.length
+                ? `<ul>${warnings.map((warning) => `<li>${this.escape(warning)}</li>`).join("")}</ul>`
+                : `<p>仍需打开官方链接，确认公司、批次和网申入口真实对应后再通过。</p>`
+            }
+          </div>
+
+          <div class="submission-fields">
+            ${fields
+              .map(([label, normalized, raw]) => {
+                const normalizedText = this.renderSubmissionValue(normalized);
+                const rawText = this.renderSubmissionValue(raw);
+                const changed = rawText !== "-" && rawText !== normalizedText;
+                return `
+                  <div class="submission-field">
+                    <span>${this.escape(label)}</span>
+                    <strong>${this.escape(normalizedText)}</strong>
+                    ${changed ? `<small>用户原填：${this.escape(rawText)}</small>` : ""}
+                  </div>
+                `;
+              })
+              .join("")}
+          </div>
+
+          <div class="submission-link-row">
+            <span>官方链接</span>
+            <a href="${this.escape(job.sourceUrl || payload.sourceUrl || "")}" target="_blank" rel="noopener noreferrer">${this.escape(job.sourceUrl || payload.sourceUrl || "-")}</a>
+          </div>
+
+          <div class="submission-description">
+            <span>备注/岗位说明</span>
+            <p>${this.escape(description)}</p>
+          </div>
+
+          <div class="form-row">
+            <label>审核备注</label>
+            <textarea id="submission-review-note" placeholder="通过可留空；驳回建议写明原因。">${this.escape(item.reviewNote || job.reviewNote || "")}</textarea>
+          </div>
+
+          <div class="toolbar modal-actions">
+            ${
+              item.status === "pending"
+                ? `
+                  <a class="btn" href="${this.escape(job.sourceUrl || payload.sourceUrl || "")}" target="_blank" rel="noopener noreferrer">打开链接核对</a>
+                  <button class="btn primary" onclick="App.reviewJobSubmission(${item.id}, 'approve')">通过</button>
+                  <button class="btn danger" onclick="App.reviewJobSubmission(${item.id}, 'reject')">驳回</button>
+                `
+                : `<span class="muted">审核结果：${this.escape(statusLabels[item.status] || item.status)}</span>`
+            }
+            <button class="btn ghost" onclick="App.closeJobSubmissionDetail()">关闭</button>
+          </div>
+        </section>
+      </div>
+    `;
+  },
+
   renderJobSubmissionQueue() {
     const submissions = this.state.jobSubmissions || [];
     const pending = submissions.filter((item) => item.status === "pending");
@@ -2604,14 +2729,10 @@ const App = {
                       <td>${this.escape(statusLabels[item.status] || item.status)}</td>
                       <td><a href="${this.escape(item.job.sourceUrl)}" target="_blank" rel="noopener noreferrer">打开</a></td>
                       <td>
-                        ${
-                          item.status === "pending"
-                            ? `<div class="toolbar table-actions">
-                                <button class="btn small primary" onclick="App.reviewJobSubmission(${item.id}, 'approve')">通过</button>
-                                <button class="btn small danger" onclick="App.reviewJobSubmission(${item.id}, 'reject')">驳回</button>
-                              </div>`
-                            : this.escape(item.reviewNote || "-")
-                        }
+                        <div class="toolbar table-actions">
+                          <button class="btn small primary" onclick="App.openJobSubmissionDetail(${item.id})">查看详情</button>
+                          ${item.warnings?.length ? `<span class="review-badge rejected">提醒 ${item.warnings.length}</span>` : ""}
+                        </div>
                       </td>
                     </tr>
                   `)

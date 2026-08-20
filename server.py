@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import html
 import io
+import ipaddress
 import json
 import mimetypes
 import os
@@ -1340,6 +1341,59 @@ def clean_url(value) -> str:
     else:
         url = urllib.parse.urlunsplit(parsed._replace(path=path, fragment=fragment))
     return url
+
+
+def is_public_job_url(value: str) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(value)
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    host = parsed.hostname.strip().lower()
+    if host in {"localhost"} or "." not in host:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast)
+
+
+def job_submission_review_warnings(job: dict, payload: dict) -> list[str]:
+    warnings = []
+    company = clean_text(job.get("company") or payload.get("company"))
+    city = clean_text(job.get("city") or payload.get("city"))
+    category = clean_text(job.get("category") or payload.get("category"))
+    deadline = clean_text(job.get("deadline") or payload.get("deadline"))
+    source_url = clean_url(job.get("sourceUrl") or payload.get("sourceUrl") or "")
+    description = clean_text(job.get("description") or payload.get("description"))
+    requirements = job.get("requirements") or payload.get("requirements") or []
+    if isinstance(requirements, str):
+        requirements_text = requirements
+    else:
+        requirements_text = " ".join(clean_text(item) for item in requirements)
+
+    if len(company) < 2:
+        warnings.append("公司名称过短，需要核对。")
+    if not is_public_job_url(source_url):
+        warnings.append("链接不是有效公网招聘链接，建议驳回。")
+    searchable = " ".join([source_url, description, requirements_text, clean_text(job.get("title") or payload.get("title"))]).lower()
+    recruit_keywords = (
+        "招聘", "校招", "网申", "校园", "实习", "应届", "投递", "career", "careers", "campus",
+        "recruit", "recruitment", "job", "jobs", "apply", "join", "hr", "mokahr", "zhaopin",
+    )
+    if not any(keyword in searchable for keyword in recruit_keywords):
+        warnings.append("链接和说明里缺少招聘/校招特征词，请人工打开核对。")
+    if city in {"", "未标注"}:
+        warnings.append("城市未标注。")
+    if category in {"", "未分类"}:
+        warnings.append("岗位方向/行业未标注。")
+    if deadline in {"", "待确认"}:
+        warnings.append("截止时间未确认。")
+    if not description and not requirements_text:
+        warnings.append("没有填写岗位说明或关键词。")
+    return warnings
 
 
 def strip_tencent_url_tail(value: str) -> str:
@@ -3213,6 +3267,9 @@ class AppHandler(BaseHTTPRequestHandler):
         except ValueError:
             self.send_json(400, {"error": "job_requires_company_title_url"})
             return
+        if not is_public_job_url(job["source_url"]):
+            self.send_json(400, {"error": "invalid_job_url"})
+            return
         if not job["requirements"]:
             job["requirements"] = split_job_tokens(job["batch"], job["category"], job["title"], job["description"])[:10]
         status = body.get("status") or "saved"
@@ -3597,6 +3654,20 @@ class AppHandler(BaseHTTPRequestHandler):
                 payload = json.loads(row["payload"] or "{}")
             except json.JSONDecodeError:
                 payload = {}
+            job_detail = {
+                "company": row["company"],
+                "title": row["title"],
+                "city": row["city"],
+                "category": row["category"],
+                "companyType": row["company_type"],
+                "batch": row["batch"],
+                "deadline": row["deadline"],
+                "sourceUrl": row["source_url"],
+                "description": row["description"],
+                "requirements": json.loads(row["requirements"] or "[]"),
+                "reviewStatus": row["review_status"],
+                "reviewNote": row["review_note"] or "",
+            }
             submissions.append(
                 {
                     "id": row["id"],
@@ -3607,20 +3678,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     "reviewedAt": utc_string(row["reviewed_at"]) if row["reviewed_at"] else "",
                     "reviewNote": row["review_note"] or "",
                     "payload": payload,
-                    "job": {
-                        "company": row["company"],
-                        "title": row["title"],
-                        "city": row["city"],
-                        "category": row["category"],
-                        "companyType": row["company_type"],
-                        "batch": row["batch"],
-                        "deadline": row["deadline"],
-                        "sourceUrl": row["source_url"],
-                        "description": row["description"],
-                        "requirements": json.loads(row["requirements"] or "[]"),
-                        "reviewStatus": row["review_status"],
-                        "reviewNote": row["review_note"] or "",
-                    },
+                    "warnings": job_submission_review_warnings(job_detail, payload),
+                    "job": job_detail,
                 }
             )
         self.send_json(200, {"submissions": submissions})

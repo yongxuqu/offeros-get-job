@@ -395,6 +395,79 @@ select:focus {
   overflow: auto;
 }
 
+.submission-detail-modal {
+  width: min(860px, 100%);
+  max-height: min(840px, calc(100vh - 36px));
+  overflow: auto;
+}
+
+.review-warning-box {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  border: 1px solid rgba(120, 243, 255, 0.22);
+  border-radius: 8px;
+  padding: 12px;
+  color: var(--text);
+  background: rgba(120, 243, 255, 0.06);
+}
+
+.review-warning-box.warn {
+  border-color: rgba(255, 122, 144, 0.35);
+  background: rgba(255, 122, 144, 0.08);
+}
+
+.review-warning-box strong,
+.review-warning-box p,
+.review-warning-box ul {
+  margin: 0;
+}
+
+.review-warning-box ul {
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.submission-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.submission-field,
+.submission-link-row,
+.submission-description {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.submission-field span,
+.submission-link-row span,
+.submission-description span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.submission-field strong,
+.submission-link-row a,
+.submission-description p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.submission-field small {
+  color: var(--muted);
+}
+
+.submission-link-row,
+.submission-description {
+  margin-top: 10px;
+}
+
 .compact-form {
   gap: 10px;
 }
