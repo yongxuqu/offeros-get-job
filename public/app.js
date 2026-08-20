@@ -95,6 +95,7 @@ const App = {
       file_required: "请先选择一份简历文件。",
       job_requires_company_title_url: "请填写公司、岗位名称和官方链接。",
       invalid_job_url: "请填写有效的公网官方链接，不能使用 localhost、内网地址或无效域名。",
+      invalid_deadline: "截止时间格式不正确，请使用 2026-08-21 18:00 这样的格式。",
       invalid_review_action: "审核操作无效。",
       submission_not_found: "这条提交记录不存在。",
       accepted_terms_required: "请先同意《用户协议》和《隐私政策》。",
@@ -698,6 +699,41 @@ const App = {
     return result;
   },
 
+  suggestedResumeRoles() {
+    const resumeText = this.resumeMatchText();
+    const tags = this.resumeTags();
+    const hasSignal = tags.length > 0 || resumeText.length > 20;
+    const catalog = [
+      ["产品经理", ["产品", "需求", "prd", "原型", "用户研究", "数据分析", "项目管理"]],
+      ["后端开发工程师", ["后端开发", "java", "python", "api", "数据库", "linux", "服务端"]],
+      ["前端开发工程师", ["前端开发", "react", "vue", "typescript", "javascript", "ui/ux"]],
+      ["数据分析师", ["数据分析", "sql", "python", "报表", "可视化", "tableau"]],
+      ["算法工程师", ["算法", "机器学习", "深度学习", "pytorch", "模型", "ai"]],
+      ["测试工程师", ["测试", "自动化", "质量", "python", "bug"]],
+      ["UI/UX 设计师", ["ui/ux", "设计", "figma", "原型", "交互", "用户体验"]],
+      ["新媒体运营", ["新媒体运营", "运营", "内容", "视频剪辑", "活动策划", "社群"]],
+      ["市场营销", ["市场营销", "市场", "营销", "品牌", "市场调研", "渠道"]],
+      ["供应链专员", ["供应链", "物流", "采购", "计划", "交付"]],
+      ["财务分析师", ["财务分析", "财务", "金融", "会计", "报表"]],
+      ["项目助理", ["项目管理", "沟通协作", "推进", "组织", "表达汇报"]],
+      ["秘书/行政助理", ["秘书", "行政", "文书", "沟通协作", "表达汇报", "组织"]],
+      ["银行管培生", ["银行", "金融", "数据分析", "沟通协作", "财务分析"]],
+      ["化工研发工程师", ["化学", "材料化学", "有机合成实验", "实验", "研发"]],
+    ];
+    const defaults = ["产品经理", "开发工程师", "数据分析师", "运营专员", "项目助理"];
+    if (!hasSignal) return defaults;
+    return catalog
+      .map(([role, keywords], index) => {
+        const scores = keywords.map((keyword) => this.requirementMatchScore(keyword, resumeText, tags));
+        const best = Math.max(...scores, 0);
+        const total = scores.reduce((sum, value) => sum + value, 0);
+        return { role, score: best * 0.7 + Math.min(1, total / Math.max(2, keywords.length)) * 0.3, index };
+      })
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .map((item) => item.role)
+      .slice(0, 5);
+  },
+
   completion() {
     if (!this.state.resume) return 0;
     const profile = this.state.resume.profile || {};
@@ -755,6 +791,7 @@ const App = {
     const resume = this.normalizeResume(this.state.resume);
     const profile = resume.profile;
     const tags = this.resumeTags();
+    const roleSuggestions = this.suggestedResumeRoles();
     return `
       <section class="section-title">
         <div>
@@ -839,6 +876,12 @@ const App = {
           <div class="list">
             ${(this.state.resume?.gaps || []).map((gap) => `<div class="list-item">${this.escape(gap)}</div>`).join("")}
             ${tags.length === 0 ? `<div class="empty">暂无能力标签。</div>` : ""}
+          </div>
+          <div class="role-suggestions">
+            <h3>适合的岗位</h3>
+            <div class="chips">
+              ${roleSuggestions.map((role) => `<span class="chip amber">${this.escape(role)}</span>`).join("")}
+            </div>
           </div>
         </aside>
       </div>
@@ -1977,7 +2020,7 @@ const App = {
         </div>
         <div class="toolbar section-actions">
           <button class="btn primary" onclick="App.openManualJobModal()">手动添加岗位</button>
-          <button class="btn" onclick="App.nav('jobs')">添加岗位</button>
+          <button class="btn" onclick="App.nav('jobs')">寻找岗位</button>
         </div>
       </section>
       <section class="kanban">
@@ -2000,6 +2043,31 @@ const App = {
     `;
   },
 
+  publicApplicationTitle(title) {
+    const text = String(title || "").trim();
+    return text && text !== "招聘岗位合集" ? text : "";
+  },
+
+  applicationPositionTitle(item) {
+    return String(item.customTitle || "").trim() || this.publicApplicationTitle(item.job?.title);
+  },
+
+  formatTimestampShort(timestamp) {
+    if (!timestamp) return "";
+    const date = new Date(Number(timestamp) * 1000);
+    if (Number.isNaN(date.getTime())) return "";
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  },
+
+  formatTimestampInput(timestamp) {
+    if (!timestamp) return "";
+    const date = new Date(Number(timestamp) * 1000);
+    if (Number.isNaN(date.getTime())) return "";
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  },
+
   applicationCard(item, statuses) {
     const actionLabels = {
       saved: "去投递",
@@ -2016,10 +2084,15 @@ const App = {
       rejected: "审核未通过",
     };
     const reviewLabel = reviewLabels[item.job.reviewStatus] || "";
+    const positionTitle = this.applicationPositionTitle(item);
+    const deadlineLabel = item.assessmentDeadlineAt ? `截止 ${this.formatTimestampShort(item.assessmentDeadlineAt)}` : "截止时间";
     return `
       <div class="application-card">
         <button class="application-remove" onclick="App.deleteApplication(${item.id})" aria-label="移出看板" title="移出看板">&times;</button>
-        <strong>${this.escape(item.job.company)} · ${this.escape(item.job.title)}</strong>
+        <strong class="application-title">
+          <span>${this.escape(item.job.company)}</span>
+          <button class="application-title-edit" onclick="App.setApplicationTitle(${item.id})">· ${this.escape(positionTitle || "添加岗位")}</button>
+        </strong>
         <p>${this.escape(item.job.city)} · ${this.escape(item.job.batch || "未标注批次")} · ${this.escape(item.job.companyType || "未分类")} · 截止 ${this.escape(item.job.deadline)}</p>
         ${reviewLabel ? `<div class="review-badge ${this.escape(item.job.reviewStatus)}">${this.escape(reviewLabel)}</div>` : ""}
         <select onchange="App.updateApplication(${item.id}, this.value)">
@@ -2028,20 +2101,56 @@ const App = {
         ${actionLabel ? `
           <div class="application-actions">
             <a class="btn small application-action" href="${this.escape(actionUrl)}" target="_blank" rel="noopener noreferrer">${actionLabel}</a>
+            ${item.status === "test" ? `<button class="btn small application-action" onclick="App.setAssessmentDeadline(${item.id})">${this.escape(deadlineLabel)}</button>` : ""}
           </div>
         ` : ""}
       </div>
     `;
   },
 
-  async updateApplication(id, status) {
+  async patchApplication(id, payload, notice = "") {
     await this.api(`/api/applications/${id}`, {
       method: "PATCH",
-      body: JSON.stringify({ status }),
+      body: JSON.stringify(payload),
     });
     const apps = await this.api("/api/applications");
     this.state.applications = apps.applications;
+    if (notice) this.setNotice(notice);
     this.render();
+  },
+
+  async updateApplication(id, status) {
+    await this.patchApplication(id, { status });
+  },
+
+  async setApplicationTitle(id) {
+    const item = this.state.applications.find((entry) => entry.id === id);
+    const current = this.applicationPositionTitle(item || {});
+    const value = window.prompt("填写这个投递记录的岗位名称，例如：产品经理、后端开发、秘书。留空可清除。", current);
+    if (value === null) return;
+    try {
+      await this.patchApplication(id, { customTitle: value }, value.trim() ? "岗位名称已更新。" : "岗位名称已清除。");
+    } catch (error) {
+      this.setError(`更新岗位名称失败：${error.message}`);
+      this.render();
+    }
+  },
+
+  async setAssessmentDeadline(id) {
+    const item = this.state.applications.find((entry) => entry.id === id);
+    const current = this.formatTimestampInput(item?.assessmentDeadlineAt);
+    const value = window.prompt("设置测评/笔试截止时间，格式：2026-08-21 18:00。留空可清除提醒。", current);
+    if (value === null) return;
+    try {
+      await this.patchApplication(
+        id,
+        { assessmentDeadlineAt: value.trim() },
+        value.trim() ? "测评/笔试截止时间已设置，截止前 3 小时会邮件提醒。" : "测评/笔试提醒已清除。",
+      );
+    } catch (error) {
+      this.setError(`设置截止时间失败：${error.message}`);
+      this.render();
+    }
   },
 
   async deleteApplication(id) {

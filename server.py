@@ -190,8 +190,37 @@ def coerce_timestamp(value) -> int | None:
     return None
 
 
+def parse_local_datetime(value) -> int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        timestamp = int(value)
+        return timestamp if timestamp > 0 else None
+    text = str(value).strip()
+    if not text:
+        return None
+    if re.fullmatch(r"\d{10,13}", text):
+        timestamp = int(text)
+        if timestamp > 10_000_000_000:
+            timestamp //= 1000
+        return timestamp
+    normalized = text.replace("T", " ").replace("/", "-")
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return int(time.mktime(time.strptime(normalized[: len(time.strftime(fmt, time.localtime(0)))], fmt)))
+        except ValueError:
+            continue
+    return coerce_timestamp(text)
+
+
 def utc_string(ts=None) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(coerce_timestamp(ts) or now()))
+
+
+def display_job_title(title: str) -> str:
+    text = clean_text(title)
+    return "" if text == "招聘岗位合集" else text
 
 
 def is_recent_timestamp(value, cutoff: int) -> bool:
@@ -341,6 +370,9 @@ def init_db() -> None:
                 job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
                 status TEXT NOT NULL,
                 notes TEXT,
+                custom_title TEXT NOT NULL DEFAULT '',
+                assessment_deadline_at INTEGER,
+                assessment_reminder_sent_at INTEGER,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 UNIQUE(user_id, job_id)
@@ -373,6 +405,13 @@ def init_db() -> None:
             conn.execute("ALTER TABLE jobs ADD COLUMN review_status TEXT NOT NULL DEFAULT 'approved'")
         if "review_note" not in job_columns:
             conn.execute("ALTER TABLE jobs ADD COLUMN review_note TEXT")
+        application_columns = {row["name"] for row in conn.execute("PRAGMA table_info(applications)").fetchall()}
+        if "custom_title" not in application_columns:
+            conn.execute("ALTER TABLE applications ADD COLUMN custom_title TEXT NOT NULL DEFAULT ''")
+        if "assessment_deadline_at" not in application_columns:
+            conn.execute("ALTER TABLE applications ADD COLUMN assessment_deadline_at INTEGER")
+        if "assessment_reminder_sent_at" not in application_columns:
+            conn.execute("ALTER TABLE applications ADD COLUMN assessment_reminder_sent_at INTEGER")
         migrate_jobs_unique_constraint(conn)
         conn.execute("DELETE FROM jobs WHERE source_url LIKE 'https://careers.example.com/%'")
 
@@ -386,7 +425,7 @@ def hash_token(token: str) -> str:
     return hmac.new(APP_SECRET.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def send_email_code(email_addr: str, code: str) -> bool:
+def send_email_message(email_addr: str, subject: str, body: str) -> bool:
     host = os.getenv("SMTP_HOST", "")
     if not host:
         return False
@@ -397,10 +436,10 @@ def send_email_code(email_addr: str, code: str) -> bool:
     sender = os.getenv("MAIL_FROM", user or f"no-reply@{host}")
 
     msg = email.message.EmailMessage()
-    msg["Subject"] = "OfferOS 登录验证码"
+    msg["Subject"] = subject
     msg["From"] = sender
     msg["To"] = email_addr
-    msg.set_content(f"你的登录验证码是：{code}\n\n验证码 10 分钟内有效。")
+    msg.set_content(body)
 
     if port == 465:
         with smtplib.SMTP_SSL(host, port, timeout=10) as smtp:
@@ -414,6 +453,79 @@ def send_email_code(email_addr: str, code: str) -> bool:
                 smtp.login(user, password)
             smtp.send_message(msg)
     return True
+
+
+def send_email_code(email_addr: str, code: str) -> bool:
+    return send_email_message(
+        email_addr,
+        "OfferOS 登录验证码",
+        f"你的登录验证码是：{code}\n\n验证码 10 分钟内有效。",
+    )
+
+
+def send_assessment_reminder(email_addr: str, label: str, deadline_at: int) -> bool:
+    deadline_text = utc_string(deadline_at)
+    return send_email_message(
+        email_addr,
+        "OfferOS 测评/笔试提醒",
+        f"距离{label}测评/笔试的时间不足3小时，记得去测评。\n\n截止时间：{deadline_text}\n\nOfferOS",
+    )
+
+
+def application_reminder_label(row: sqlite3.Row) -> str:
+    custom_title = clean_text(row["custom_title"] if "custom_title" in row.keys() else "")
+    public_title = display_job_title(row["title"])
+    title = custom_title or public_title
+    return f"{row['company']} · {title}" if title else row["company"]
+
+
+def check_assessment_reminders() -> None:
+    timestamp = now()
+    with connect_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT applications.id, applications.custom_title, applications.assessment_deadline_at,
+                   users.email, jobs.company, jobs.title
+            FROM applications
+            JOIN users ON users.id = applications.user_id
+            JOIN jobs ON jobs.id = applications.job_id
+            WHERE applications.status = 'test'
+              AND applications.assessment_deadline_at IS NOT NULL
+              AND applications.assessment_deadline_at > ?
+              AND applications.assessment_deadline_at <= ?
+              AND (applications.assessment_reminder_sent_at IS NULL OR applications.assessment_reminder_sent_at = 0)
+            LIMIT 50
+            """,
+            (timestamp, timestamp + 3 * 60 * 60),
+        ).fetchall()
+        for row in rows:
+            try:
+                sent = send_assessment_reminder(
+                    row["email"],
+                    application_reminder_label(row),
+                    int(row["assessment_deadline_at"]),
+                )
+            except Exception as exc:
+                print(f"[{utc_string()}] assessment_reminder_failed application={row['id']} error={type(exc).__name__}")
+                sent = False
+            if sent:
+                conn.execute(
+                    "UPDATE applications SET assessment_reminder_sent_at = ?, updated_at = ? WHERE id = ?",
+                    (timestamp, timestamp, row["id"]),
+                )
+
+
+def run_assessment_reminder_loop() -> None:
+    while True:
+        try:
+            check_assessment_reminders()
+        except Exception as exc:
+            print(f"[{utc_string()}] assessment_reminder_loop_error error={type(exc).__name__}")
+        time.sleep(60)
+
+
+def start_background_tasks() -> None:
+    threading.Thread(target=run_assessment_reminder_loop, name="assessment-reminders", daemon=True).start()
 
 
 def job_source_update_date(description: str, fallback_ts=None) -> str:
@@ -3205,6 +3317,11 @@ class AppHandler(BaseHTTPRequestHandler):
                     "status": row["status"],
                     "statusLabel": STATUS_LABELS.get(row["status"], row["status"]),
                     "notes": row["notes"] or "",
+                    "customTitle": row["custom_title"] or "",
+                    "assessmentDeadlineAt": row["assessment_deadline_at"] or None,
+                    "assessmentDeadline": utc_string(row["assessment_deadline_at"]) if row["assessment_deadline_at"] else "",
+                    "assessmentReminderSentAt": row["assessment_reminder_sent_at"] or None,
+                    "assessmentReminderSent": utc_string(row["assessment_reminder_sent_at"]) if row["assessment_reminder_sent_at"] else "",
                     "updatedAt": utc_string(row["updated_at"]),
                     "job": {
                         "company": row["company"],
@@ -3389,6 +3506,14 @@ class AppHandler(BaseHTTPRequestHandler):
         body = self.read_json()
         status = body.get("status")
         notes = body.get("notes")
+        custom_title = clean_text(body.get("customTitle"))[:80] if "customTitle" in body else None
+        deadline_provided = "assessmentDeadlineAt" in body or "assessmentDeadline" in body
+        assessment_deadline_at = None
+        if deadline_provided:
+            assessment_deadline_at = parse_local_datetime(body.get("assessmentDeadlineAt", body.get("assessmentDeadline")))
+            if assessment_deadline_at is None and body.get("assessmentDeadlineAt", body.get("assessmentDeadline")) not in (None, ""):
+                self.send_json(400, {"error": "invalid_deadline"})
+                return
         if status is not None and status not in STATUS_LABELS:
             self.send_json(400, {"error": "invalid_status"})
             return
@@ -3403,10 +3528,25 @@ class AppHandler(BaseHTTPRequestHandler):
             conn.execute(
                 """
                 UPDATE applications
-                SET status = COALESCE(?, status), notes = COALESCE(?, notes), updated_at = ?
+                SET status = COALESCE(?, status),
+                    notes = COALESCE(?, notes),
+                    custom_title = COALESCE(?, custom_title),
+                    assessment_deadline_at = CASE WHEN ? THEN ? ELSE assessment_deadline_at END,
+                    assessment_reminder_sent_at = CASE WHEN ? THEN NULL ELSE assessment_reminder_sent_at END,
+                    updated_at = ?
                 WHERE id = ? AND user_id = ?
                 """,
-                (status, notes, now(), app_id, user["id"]),
+                (
+                    status,
+                    notes,
+                    custom_title,
+                    1 if deadline_provided else 0,
+                    assessment_deadline_at,
+                    1 if deadline_provided else 0,
+                    now(),
+                    app_id,
+                    user["id"],
+                ),
             )
         self.send_json(200, {"ok": True})
 
@@ -3881,6 +4021,7 @@ class AppHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     init_db()
+    start_background_tasks()
     port = int(os.getenv("PORT", "8000"))
     server = ThreadingHTTPServer(("127.0.0.1", port), AppHandler)
     print(f"OfferOS running at http://127.0.0.1:{port}")

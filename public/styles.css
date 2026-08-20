@@ -991,6 +991,26 @@ select:focus {
   margin-bottom: 4px;
 }
 
+.application-title {
+  line-height: 1.35;
+}
+
+.application-title-edit {
+  display: inline;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.application-title-edit:hover {
+  color: var(--accent);
+}
+
 .application-card p {
   margin: 0 0 10px;
   color: var(--muted);
@@ -1014,6 +1034,17 @@ select:focus {
   border-color: rgba(255, 122, 144, 0.35);
   color: #ffd7de;
   background: rgba(255, 122, 144, 0.08);
+}
+
+.role-suggestions {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.role-suggestions h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
 }
 
 .application-remove {
@@ -1042,6 +1073,7 @@ select:focus {
 
 .application-actions {
   display: flex;
+  gap: 8px;
   margin-top: 10px;
 }
 
