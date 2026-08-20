@@ -8,6 +8,7 @@ const App = {
     applications: [],
     interviews: [],
     adminStats: null,
+    jobSubmissions: [],
     jobsMeta: { total: 0, limit: 120, offset: 0, returned: 0, hasMore: false },
     jobsPage: 1,
     jobsPerPage: 120,
@@ -24,6 +25,7 @@ const App = {
     syncResult: null,
     pendingParse: null,
     parseProgress: null,
+    manualJobModalOpen: false,
     interview: null,
     recording: false,
     error: "",
@@ -90,6 +92,9 @@ const App = {
       smtp_not_configured: "验证码邮件服务未配置。",
       invalid_file_data: "文件读取失败，请重新选择文件。",
       file_required: "请先选择一份简历文件。",
+      job_requires_company_title_url: "请填写公司、岗位名称和官方链接。",
+      invalid_review_action: "审核操作无效。",
+      submission_not_found: "这条提交记录不存在。",
       accepted_terms_required: "请先同意《用户协议》和《隐私政策》。",
       server_error: "服务器处理失败，请稍后重试。",
     };
@@ -106,8 +111,12 @@ const App = {
     await this.loadJobs(true);
 
     if (status.admin) {
-      const stats = await this.api("/api/admin/stats");
+      const [stats, submissions] = await Promise.all([
+        this.api("/api/admin/stats"),
+        this.api("/api/admin/job-submissions"),
+      ]);
       this.state.adminStats = stats.stats;
+      this.state.jobSubmissions = submissions.submissions || [];
       this.state.resume = null;
       this.state.rawText = "";
       this.state.applications = [];
@@ -344,6 +353,7 @@ const App = {
       </div>
       ${this.renderToast()}
       ${this.renderParseModal()}
+      ${this.renderManualJobModal()}
       ${this.renderLegalModal()}
     `;
     this.restoreActiveElement(active);
@@ -1291,6 +1301,100 @@ const App = {
     `;
   },
 
+  renderManualJobModal() {
+    if (!this.state.manualJobModalOpen) return "";
+    const statuses = this.applicationStatuses();
+    return `
+      <div class="modal-backdrop" role="dialog" aria-modal="true">
+        <section class="parse-modal job-submit-modal">
+          <div class="modal-head">
+            <span class="modal-indicator ok"></span>
+            <div>
+              <h3>手动添加岗位</h3>
+              <p>先保存到你的投递看板，同时提交给官方审核。</p>
+            </div>
+          </div>
+          <div class="resume-form compact-form">
+            ${this.textField("manual-company", "公司", "", "text", "例如 字节跳动")}
+            ${this.textField("manual-title", "岗位名称", "招聘岗位合集", "text", "例如 产品经理 / 招聘岗位合集")}
+            ${this.textField("manual-city", "城市", "", "text", "例如 北京 上海")}
+            ${this.textField("manual-category", "岗位方向/行业", "", "text", "例如 互联网 / AI / 产品")}
+            ${this.selectField("manual-companyType", "企业类型", "", ["", "央企", "国企", "央国企", "民企", "外企", "事业单位", "银行", "其他"])}
+            ${this.selectField("manual-batch", "招聘批次", "27届秋招", ["27届秋招", "实习", "26届春招"])}
+            ${this.textField("manual-deadline", "截止日期", "", "text", "例如 2026-09-30 / 尽快投递")}
+            <div class="form-row">
+              <label>加入状态</label>
+              <select id="manual-status">
+                ${statuses.map(([status, label]) => `<option value="${this.escape(status)}" ${status === "saved" ? "selected" : ""}>${this.escape(label)}</option>`).join("")}
+              </select>
+            </div>
+            ${this.textField("manual-sourceUrl", "官方校招/网申链接", "", "url", "https://...")}
+            ${this.textareaField("manual-requirements", "关键词", "")}
+            ${this.textareaField("manual-description", "备注/岗位说明", "")}
+          </div>
+          <div class="toolbar modal-actions">
+            <button class="btn primary" onclick="App.submitManualJob()">保存并提交审核</button>
+            <button class="btn ghost" onclick="App.closeManualJobModal()">取消</button>
+          </div>
+        </section>
+      </div>
+    `;
+  },
+
+  openManualJobModal() {
+    this.state.manualJobModalOpen = true;
+    this.render();
+  },
+
+  closeManualJobModal() {
+    this.state.manualJobModalOpen = false;
+    this.render();
+  },
+
+  collectManualJob() {
+    return {
+      company: this.getInput("manual-company"),
+      title: this.getInput("manual-title") || "招聘岗位合集",
+      city: this.getInput("manual-city"),
+      category: this.getInput("manual-category"),
+      companyType: this.getInput("manual-companyType"),
+      batch: this.getInput("manual-batch"),
+      deadline: this.getInput("manual-deadline") || "待确认",
+      sourceUrl: this.getInput("manual-sourceUrl"),
+      requirements: this.getInput("manual-requirements"),
+      description: this.getInput("manual-description"),
+      status: this.getInput("manual-status") || "saved",
+    };
+  },
+
+  async submitManualJob() {
+    try {
+      const payload = this.collectManualJob();
+      if (!payload.company || !payload.title || !payload.sourceUrl) {
+        this.setError("请填写公司、岗位名称和官方链接。");
+        this.render();
+        return;
+      }
+      const data = await this.api("/api/user/jobs", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      const apps = await this.api("/api/applications");
+      this.state.applications = apps.applications;
+      if (data.reviewStatus === "approved") {
+        await this.loadJobs(true);
+        this.setNotice("已加入投递看板，公共岗位库已有该岗位。");
+      } else {
+        this.setNotice("已加入投递看板，并提交官方审核。");
+      }
+      this.state.manualJobModalOpen = false;
+      this.render();
+    } catch (error) {
+      this.setError(`添加岗位失败：${error.message}`);
+      this.render();
+    }
+  },
+
   apiJsonWithUploadProgress(path, payload, onUploadProgress) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -1847,23 +1951,31 @@ const App = {
     }
   },
 
-  renderApplications() {
-    const statuses = [
+  applicationStatuses() {
+    return [
       ["saved", "已收藏"],
       ["preparing", "准备投递"],
       ["applied", "已投递"],
       ["test", "测评/笔试"],
       ["interview", "面试"],
       ["offer", "Offer"],
-      ["rejected", "已拒绝"],
+      ["rejected", "未通过"],
+      ["abandoned", "已弃投"],
     ];
+  },
+
+  renderApplications() {
+    const statuses = this.applicationStatuses();
     return `
       <section class="section-title">
         <div>
           <h2>投递看板</h2>
           <p>不用打开很多招聘网站，也能先把状态统一管起来。</p>
         </div>
-        <button class="btn primary" onclick="App.nav('jobs')">添加岗位</button>
+        <div class="toolbar section-actions">
+          <button class="btn primary" onclick="App.openManualJobModal()">手动添加岗位</button>
+          <button class="btn" onclick="App.nav('jobs')">添加岗位</button>
+        </div>
       </section>
       <section class="kanban">
         ${statuses
@@ -1896,11 +2008,17 @@ const App = {
     };
     const actionLabel = actionLabels[item.status] || "";
     const actionUrl = item.job.sourceUrl || "#";
+    const reviewLabels = {
+      pending: "官方审核中",
+      rejected: "审核未通过",
+    };
+    const reviewLabel = reviewLabels[item.job.reviewStatus] || "";
     return `
       <div class="application-card">
         <button class="application-remove" onclick="App.deleteApplication(${item.id})" aria-label="移出看板" title="移出看板">&times;</button>
         <strong>${this.escape(item.job.company)} · ${this.escape(item.job.title)}</strong>
         <p>${this.escape(item.job.city)} · ${this.escape(item.job.batch || "未标注批次")} · ${this.escape(item.job.companyType || "未分类")} · 截止 ${this.escape(item.job.deadline)}</p>
+        ${reviewLabel ? `<div class="review-badge ${this.escape(item.job.reviewStatus)}">${this.escape(reviewLabel)}</div>` : ""}
         <select onchange="App.updateApplication(${item.id}, this.value)">
           ${statuses.map(([status, label]) => `<option value="${status}" ${item.status === status ? "selected" : ""}>${label}</option>`).join("")}
         </select>
@@ -1941,12 +2059,50 @@ const App = {
 
   async refreshAdminStats() {
     try {
-      const stats = await this.api("/api/admin/stats");
+      const [stats, submissions] = await Promise.all([
+        this.api("/api/admin/stats"),
+        this.api("/api/admin/job-submissions"),
+      ]);
       this.state.adminStats = stats.stats;
+      this.state.jobSubmissions = submissions.submissions || [];
       this.setNotice("后台统计已刷新。");
       this.render();
     } catch (error) {
       this.setError(`刷新统计失败：${error.message}`);
+      this.render();
+    }
+  },
+
+  async refreshJobSubmissions() {
+    try {
+      const submissions = await this.api("/api/admin/job-submissions");
+      this.state.jobSubmissions = submissions.submissions || [];
+      this.setNotice("审核列表已刷新。");
+      this.render();
+    } catch (error) {
+      this.setError(`刷新审核列表失败：${error.message}`);
+      this.render();
+    }
+  },
+
+  async reviewJobSubmission(id, action) {
+    const note = action === "reject" ? window.prompt("驳回原因（选填）") || "" : "";
+    try {
+      await this.api(`/api/admin/job-submissions/${id}/review`, {
+        method: "POST",
+        body: JSON.stringify({ action, note }),
+      });
+      const [submissions, stats] = await Promise.all([
+        this.api("/api/admin/job-submissions"),
+        this.api("/api/admin/stats"),
+      ]);
+      this.state.jobSubmissions = submissions.submissions || [];
+      this.state.adminStats = stats.stats;
+      await this.loadJobs(true);
+      this.setNotice(action === "approve" ? "已通过，岗位已进入公共岗位库。" : "已驳回，岗位不会进入公共岗位库。");
+      this.render();
+    } catch (error) {
+      this.setError(`审核失败：${error.message}`);
       this.render();
     }
   },
@@ -2347,6 +2503,7 @@ const App = {
       ["简历数量", counts.resumes ?? 0, "已保存结构化简历"],
       ["企业数量", counts.companies ?? 0, "按岗位公司去重"],
       ["岗位数量", counts.jobs ?? 0, "当前岗位库"],
+      ["待审岗位", counts.pendingJobSubmissions ?? 0, "用户提交"],
       ["投递记录", counts.applications ?? 0, "用户看板记录"],
       ["面试报告", counts.interviews ?? 0, "仅报告与总结"],
       ["插件令牌", counts.pluginTokens ?? 0, "未撤销连接令牌"],
@@ -2415,6 +2572,57 @@ const App = {
     `;
   },
 
+  renderJobSubmissionQueue() {
+    const submissions = this.state.jobSubmissions || [];
+    const pending = submissions.filter((item) => item.status === "pending");
+    const visible = pending.length ? pending : submissions.slice(0, 6);
+    const statusLabels = {
+      pending: "待审核",
+      approved: "已通过",
+      rejected: "已驳回",
+    };
+    return `
+      <section class="panel" style="margin-bottom: 14px;">
+        <div class="company-detail-head">
+          <div>
+            <h3 style="margin-top: 0;">用户提交审核</h3>
+            <p class="muted">通过后进入全站岗位库；驳回后仍只保留在提交用户自己的投递看板。</p>
+          </div>
+          <button class="btn small" onclick="App.refreshJobSubmissions()">刷新</button>
+        </div>
+        ${
+          visible.length
+            ? `<table>
+                <thead><tr><th>公司</th><th>批次</th><th>城市</th><th>提交人</th><th>状态</th><th>链接</th><th>操作</th></tr></thead>
+                <tbody>${visible
+                  .map((item) => `
+                    <tr>
+                      <td><strong>${this.escape(item.job.company)}</strong><br><span class="muted">${this.escape(item.job.title)}</span></td>
+                      <td>${this.escape(item.job.batch || "未标注")}</td>
+                      <td>${this.escape(item.job.city || "未标注")}</td>
+                      <td>${this.escape(item.submitter || "-")}</td>
+                      <td>${this.escape(statusLabels[item.status] || item.status)}</td>
+                      <td><a href="${this.escape(item.job.sourceUrl)}" target="_blank" rel="noopener noreferrer">打开</a></td>
+                      <td>
+                        ${
+                          item.status === "pending"
+                            ? `<div class="toolbar table-actions">
+                                <button class="btn small primary" onclick="App.reviewJobSubmission(${item.id}, 'approve')">通过</button>
+                                <button class="btn small danger" onclick="App.reviewJobSubmission(${item.id}, 'reject')">驳回</button>
+                              </div>`
+                            : this.escape(item.reviewNote || "-")
+                        }
+                      </td>
+                    </tr>
+                  `)
+                  .join("")}</tbody>
+              </table>`
+            : `<div class="empty">暂无待审核岗位</div>`
+        }
+      </section>
+    `;
+  },
+
   renderAdmin() {
     const csvSample = `company,title,city,category,companyType,batch,deadline,sourceUrl,description,requirements
 中国移动,招聘岗位合集,北京,产品,央企,27届秋招,2026-09-30,https://job.10086.cn,负责产品规划和需求推进,产品设计、数据分析、沟通协作
@@ -2426,6 +2634,7 @@ const App = {
           <p>维护真实企业岗位库；手动新增和 CSV 导入都以官方链接作为去重依据。</p>
         </div>
       </section>
+      ${this.renderJobSubmissionQueue()}
       <div class="split">
         <section class="panel">
           <h2 style="margin-top: 0;">手动新增/更新</h2>

@@ -165,7 +165,8 @@ STATUS_LABELS = {
     "test": "测评/笔试",
     "interview": "面试",
     "offer": "Offer",
-    "rejected": "已拒绝",
+    "rejected": "未通过",
+    "abandoned": "已弃投",
 }
 
 
@@ -229,12 +230,16 @@ def migrate_jobs_unique_constraint(conn: sqlite3.Connection) -> None:
             description TEXT NOT NULL,
             requirements TEXT NOT NULL,
             updated_at INTEGER NOT NULL,
+            owner_user_id INTEGER,
+            review_status TEXT NOT NULL DEFAULT 'approved',
+            review_note TEXT,
             UNIQUE(company, source_url)
         );
 
         INSERT OR IGNORE INTO jobs_new
-        (id, company, title, city, category, company_type, batch, source, deadline, source_url, description, requirements, updated_at)
-        SELECT id, company, title, city, category, company_type, batch, source, deadline, source_url, description, requirements, updated_at
+        (id, company, title, city, category, company_type, batch, source, deadline, source_url, description, requirements, updated_at, owner_user_id, review_status, review_note)
+        SELECT id, company, title, city, category, company_type, batch, source, deadline, source_url, description, requirements, updated_at,
+               owner_user_id, COALESCE(NULLIF(review_status, ''), 'approved'), review_note
         FROM jobs
         ORDER BY id;
 
@@ -311,7 +316,22 @@ def init_db() -> None:
                 description TEXT NOT NULL,
                 requirements TEXT NOT NULL,
                 updated_at INTEGER NOT NULL,
+                owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                review_status TEXT NOT NULL DEFAULT 'approved',
+                review_note TEXT,
                 UNIQUE(company, source_url)
+            );
+
+            CREATE TABLE IF NOT EXISTS job_submissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                status TEXT NOT NULL DEFAULT 'pending',
+                payload TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                reviewed_at INTEGER,
+                reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                review_note TEXT
             );
 
             CREATE TABLE IF NOT EXISTS applications (
@@ -346,6 +366,12 @@ def init_db() -> None:
             conn.execute("ALTER TABLE jobs ADD COLUMN batch TEXT NOT NULL DEFAULT ''")
         if "source" not in job_columns:
             conn.execute("ALTER TABLE jobs ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
+        if "owner_user_id" not in job_columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN owner_user_id INTEGER")
+        if "review_status" not in job_columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN review_status TEXT NOT NULL DEFAULT 'approved'")
+        if "review_note" not in job_columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN review_note TEXT")
         migrate_jobs_unique_constraint(conn)
         conn.execute("DELETE FROM jobs WHERE source_url LIKE 'https://careers.example.com/%'")
 
@@ -412,6 +438,8 @@ def row_to_job(row: sqlite3.Row) -> dict:
         "requirements": json.loads(row["requirements"]),
         "sourceDate": job_source_update_date(row["description"], row["updated_at"]),
         "updatedAt": utc_string(row["updated_at"]),
+        "reviewStatus": row["review_status"] if "review_status" in row.keys() else "approved",
+        "reviewNote": row["review_note"] if "review_note" in row.keys() else "",
     }
 
 
@@ -1474,7 +1502,8 @@ def upsert_job(conn: sqlite3.Connection, payload: dict) -> int:
                 """
                 UPDATE jobs
                 SET company = ?, title = ?, city = ?, category = ?, company_type = ?, batch = ?, source = ?,
-                    deadline = ?, source_url = ?, description = ?, requirements = ?, updated_at = ?
+                    deadline = ?, source_url = ?, description = ?, requirements = ?, updated_at = ?,
+                    owner_user_id = NULL, review_status = 'approved', review_note = ''
                 WHERE id = ?
                 """,
                 (
@@ -1515,7 +1544,10 @@ def upsert_job(conn: sqlite3.Connection, payload: dict) -> int:
             deadline = excluded.deadline,
             description = excluded.description,
             requirements = excluded.requirements,
-            updated_at = excluded.updated_at
+            updated_at = excluded.updated_at,
+            owner_user_id = NULL,
+            review_status = 'approved',
+            review_note = ''
         """,
         (
             job["company"],
@@ -2697,6 +2729,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.handle_get_applications()
             elif method == "POST" and path == "/api/applications":
                 self.handle_upsert_application()
+            elif method == "POST" and path == "/api/user/jobs":
+                self.handle_create_user_job()
             elif method == "PATCH" and path.startswith("/api/applications/"):
                 self.handle_patch_application(path)
             elif method == "DELETE" and path.startswith("/api/applications/"):
@@ -2711,6 +2745,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.handle_delete_interview(path)
             elif method == "GET" and path == "/api/admin/stats":
                 self.handle_admin_stats()
+            elif method == "GET" and path == "/api/admin/job-submissions":
+                self.handle_admin_job_submissions()
+            elif method == "POST" and path.startswith("/api/admin/job-submissions/"):
+                self.handle_admin_review_job_submission(path)
             elif method == "POST" and path == "/api/admin/jobs":
                 self.handle_admin_upsert_job()
             elif method == "POST" and path == "/api/admin/jobs/import-csv":
@@ -2983,7 +3021,7 @@ class AppHandler(BaseHTTPRequestHandler):
         limit = max(1, min(limit, 300))
         offset = max(0, offset)
 
-        clauses = []
+        clauses = ["review_status = 'approved'"]
         values = []
         batch = first_param("batch")
         city = first_param("city")
@@ -3006,7 +3044,7 @@ class AppHandler(BaseHTTPRequestHandler):
             )
             values.extend([like, like, like, like, like, like, like, like])
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        facet_clauses = []
+        facet_clauses = ["review_status = 'approved'"]
         facet_values = []
         if batch and batch != "all":
             facet_clauses.append("batch = ?")
@@ -3096,7 +3134,7 @@ class AppHandler(BaseHTTPRequestHandler):
             rows = conn.execute(
                 """
                 SELECT applications.*, jobs.company, jobs.title, jobs.city, jobs.deadline, jobs.category,
-                       jobs.company_type, jobs.batch, jobs.source, jobs.source_url
+                       jobs.company_type, jobs.batch, jobs.source, jobs.source_url, jobs.review_status, jobs.review_note
                 FROM applications
                 JOIN jobs ON jobs.id = applications.job_id
                 WHERE applications.user_id = ?
@@ -3124,6 +3162,8 @@ class AppHandler(BaseHTTPRequestHandler):
                         "batch": row["batch"],
                         "source": row["source"],
                         "sourceUrl": row["source_url"],
+                        "reviewStatus": row["review_status"],
+                        "reviewNote": row["review_note"] or "",
                     },
                 }
             )
@@ -3141,8 +3181,11 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "invalid_status"})
             return
         with connect_db() as conn:
-            job = conn.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            job = conn.execute("SELECT id, owner_user_id, review_status FROM jobs WHERE id = ?", (job_id,)).fetchone()
             if not job:
+                self.send_json(404, {"error": "job_not_found"})
+                return
+            if job["review_status"] != "approved" and int(job["owner_user_id"] or 0) != int(user["id"]):
                 self.send_json(404, {"error": "job_not_found"})
                 return
             conn.execute(
@@ -3157,6 +3200,129 @@ class AppHandler(BaseHTTPRequestHandler):
                 (user["id"], job_id, status, notes, now(), now()),
             )
         self.send_json(200, {"ok": True})
+
+    def handle_create_user_job(self) -> None:
+        user = self.require_user()
+        if not user:
+            return
+        body = self.read_json()
+        body["title"] = clean_text(body.get("title") or "招聘岗位合集")
+        body["source"] = "user_submission"
+        try:
+            job = sanitize_job_payload(body)
+        except ValueError:
+            self.send_json(400, {"error": "job_requires_company_title_url"})
+            return
+        if not job["requirements"]:
+            job["requirements"] = split_job_tokens(job["batch"], job["category"], job["title"], job["description"])[:10]
+        status = body.get("status") or "saved"
+        if status not in STATUS_LABELS:
+            status = "saved"
+        timestamp = now()
+        requirements = json.dumps(job["requirements"], ensure_ascii=False)
+        payload = {
+            "company": job["company"],
+            "title": job["title"],
+            "city": job["city"],
+            "category": job["category"],
+            "companyType": job["company_type"],
+            "batch": job["batch"],
+            "deadline": job["deadline"],
+            "sourceUrl": job["source_url"],
+            "description": job["description"],
+            "requirements": job["requirements"],
+        }
+        with connect_db() as conn:
+            existing = conn.execute(
+                "SELECT * FROM jobs WHERE company = ? AND source_url = ?",
+                (job["company"], job["source_url"]),
+            ).fetchone()
+            if existing:
+                job_id = existing["id"]
+                review_status = existing["review_status"] or "approved"
+                if review_status != "approved" and (
+                    not existing["owner_user_id"]
+                    or int(existing["owner_user_id"]) == int(user["id"])
+                    or review_status == "rejected"
+                ):
+                    conn.execute(
+                        """
+                        UPDATE jobs
+                        SET title = ?, city = ?, category = ?, company_type = ?, batch = ?, source = ?,
+                            deadline = ?, description = ?, requirements = ?, owner_user_id = ?,
+                            review_status = 'pending', review_note = '', updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            job["title"],
+                            job["city"],
+                            job["category"],
+                            job["company_type"],
+                            job["batch"],
+                            "user_submission",
+                            job["deadline"],
+                            job["description"],
+                            requirements,
+                            user["id"],
+                            timestamp,
+                            job_id,
+                        ),
+                    )
+                    review_status = "pending"
+                submission_status = "approved" if review_status == "approved" else "pending"
+            else:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO jobs
+                    (company, title, city, category, company_type, batch, source, deadline, source_url,
+                     description, requirements, updated_at, owner_user_id, review_status, review_note)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '')
+                    """,
+                    (
+                        job["company"],
+                        job["title"],
+                        job["city"],
+                        job["category"],
+                        job["company_type"],
+                        job["batch"],
+                        "user_submission",
+                        job["deadline"],
+                        job["source_url"],
+                        job["description"],
+                        requirements,
+                        timestamp,
+                        user["id"],
+                    ),
+                )
+                job_id = cursor.lastrowid
+                submission_status = "pending"
+
+            conn.execute(
+                """
+                INSERT INTO applications (user_id, job_id, status, notes, created_at, updated_at)
+                VALUES (?, ?, ?, '', ?, ?)
+                ON CONFLICT(user_id, job_id) DO UPDATE SET
+                    status = excluded.status,
+                    updated_at = excluded.updated_at
+                """,
+                (user["id"], job_id, status, timestamp, timestamp),
+            )
+            conn.execute(
+                """
+                INSERT INTO job_submissions (user_id, job_id, status, payload, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (user["id"], job_id, submission_status, json.dumps(payload, ensure_ascii=False), timestamp),
+            )
+            row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        self.send_json(
+            200,
+            {
+                "ok": True,
+                "reviewStatus": submission_status,
+                "job": row_to_job(row),
+            },
+        )
 
     def handle_patch_application(self, path: str) -> None:
         user = self.require_user()
@@ -3309,6 +3475,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 f"""
                 SELECT COALESCE(NULLIF({column}, ''), '未分类') AS label, COUNT(*) AS count
                 FROM jobs
+                WHERE review_status = 'approved'
                 GROUP BY COALESCE(NULLIF({column}, ''), '未分类')
                 ORDER BY count DESC, label ASC
                 LIMIT 8
@@ -3335,10 +3502,13 @@ class AppHandler(BaseHTTPRequestHandler):
                 and is_recent_timestamp(row["last_login_at"], active_cutoff)
             )
             resume_count = conn.execute("SELECT COUNT(*) AS count FROM resumes").fetchone()["count"]
-            job_count = conn.execute("SELECT COUNT(*) AS count FROM jobs").fetchone()["count"]
-            company_count = conn.execute("SELECT COUNT(DISTINCT company) AS count FROM jobs").fetchone()["count"]
+            job_count = conn.execute("SELECT COUNT(*) AS count FROM jobs WHERE review_status = 'approved'").fetchone()["count"]
+            company_count = conn.execute("SELECT COUNT(DISTINCT company) AS count FROM jobs WHERE review_status = 'approved'").fetchone()["count"]
             application_count = conn.execute("SELECT COUNT(*) AS count FROM applications").fetchone()["count"]
             interview_count = conn.execute("SELECT COUNT(*) AS count FROM interviews").fetchone()["count"]
+            pending_submission_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM job_submissions WHERE status = 'pending'"
+            ).fetchone()["count"]
             plugin_token_count = conn.execute(
                 "SELECT COUNT(*) AS count FROM plugin_tokens WHERE revoked_at IS NULL"
             ).fetchone()["count"]
@@ -3361,6 +3531,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     "applications": application_count,
                     "interviews": interview_count,
                     "pluginTokens": plugin_token_count,
+                    "pendingJobSubmissions": pending_submission_count,
                 },
                 "database": {
                     "bytes": db_bytes,
@@ -3389,6 +3560,132 @@ class AppHandler(BaseHTTPRequestHandler):
             }
 
         self.send_json(200, {"stats": stats})
+
+    def handle_admin_job_submissions(self) -> None:
+        user = self.require_admin()
+        if not user:
+            return
+
+        def mask_email_address(email_addr: str) -> str:
+            local, _, domain = email_addr.partition("@")
+            if not domain:
+                return "***"
+            if len(local) <= 2:
+                masked_local = local[:1] + "***"
+            else:
+                masked_local = local[:2] + "***" + local[-1:]
+            return f"{masked_local}@{domain}"
+
+        with connect_db() as conn:
+            rows = conn.execute(
+                """
+                SELECT job_submissions.*, users.email, jobs.company, jobs.title, jobs.city, jobs.category,
+                       jobs.company_type, jobs.batch, jobs.deadline, jobs.source_url, jobs.description,
+                       jobs.requirements, jobs.review_status, jobs.review_note
+                FROM job_submissions
+                JOIN users ON users.id = job_submissions.user_id
+                JOIN jobs ON jobs.id = job_submissions.job_id
+                ORDER BY CASE job_submissions.status WHEN 'pending' THEN 0 ELSE 1 END,
+                         job_submissions.created_at DESC
+                LIMIT 50
+                """
+            ).fetchall()
+        submissions = []
+        for row in rows:
+            payload = {}
+            try:
+                payload = json.loads(row["payload"] or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            submissions.append(
+                {
+                    "id": row["id"],
+                    "jobId": row["job_id"],
+                    "status": row["status"],
+                    "submitter": mask_email_address(row["email"]),
+                    "createdAt": utc_string(row["created_at"]),
+                    "reviewedAt": utc_string(row["reviewed_at"]) if row["reviewed_at"] else "",
+                    "reviewNote": row["review_note"] or "",
+                    "payload": payload,
+                    "job": {
+                        "company": row["company"],
+                        "title": row["title"],
+                        "city": row["city"],
+                        "category": row["category"],
+                        "companyType": row["company_type"],
+                        "batch": row["batch"],
+                        "deadline": row["deadline"],
+                        "sourceUrl": row["source_url"],
+                        "description": row["description"],
+                        "requirements": json.loads(row["requirements"] or "[]"),
+                        "reviewStatus": row["review_status"],
+                        "reviewNote": row["review_note"] or "",
+                    },
+                }
+            )
+        self.send_json(200, {"submissions": submissions})
+
+    def handle_admin_review_job_submission(self, path: str) -> None:
+        user = self.require_admin()
+        if not user:
+            return
+        parts = [part for part in path.strip("/").split("/") if part]
+        if len(parts) < 3:
+            self.send_json(404, {"error": "submission_not_found"})
+            return
+        try:
+            submission_id = int(parts[-2] if parts[-1] == "review" else parts[-1])
+        except ValueError:
+            self.send_json(400, {"error": "invalid_submission_id"})
+            return
+        body = self.read_json()
+        action = clean_text(body.get("action") or "")
+        note = clean_text(body.get("note") or "")
+        if action not in {"approve", "reject"}:
+            self.send_json(400, {"error": "invalid_review_action"})
+            return
+        review_status = "approved" if action == "approve" else "rejected"
+        timestamp = now()
+        with connect_db() as conn:
+            row = conn.execute(
+                """
+                SELECT job_submissions.*, jobs.review_status
+                FROM job_submissions
+                JOIN jobs ON jobs.id = job_submissions.job_id
+                WHERE job_submissions.id = ?
+                """,
+                (submission_id,),
+            ).fetchone()
+            if not row:
+                self.send_json(404, {"error": "submission_not_found"})
+                return
+            conn.execute(
+                """
+                UPDATE job_submissions
+                SET status = ?, reviewed_at = ?, reviewed_by = ?, review_note = ?
+                WHERE id = ?
+                """,
+                (review_status, timestamp, user["id"], note, submission_id),
+            )
+            if action == "approve":
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET review_status = 'approved', review_note = ?, owner_user_id = NULL, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (note, timestamp, row["job_id"]),
+                )
+            elif row["review_status"] != "approved":
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET review_status = 'rejected', review_note = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (note, timestamp, row["job_id"]),
+                )
+        self.send_json(200, {"ok": True, "status": review_status})
 
     def handle_admin_upsert_job(self) -> None:
         user = self.require_admin()

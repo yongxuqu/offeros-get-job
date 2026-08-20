@@ -389,6 +389,22 @@ select:focus {
   box-shadow: 0 24px 120px rgba(0, 0, 0, 0.65);
 }
 
+.job-submit-modal {
+  width: min(760px, 100%);
+  max-height: min(820px, calc(100vh - 36px));
+  overflow: auto;
+}
+
+.compact-form {
+  gap: 10px;
+}
+
+.modal-actions {
+  justify-content: flex-end;
+  margin-top: 16px;
+  margin-bottom: 0;
+}
+
 .legal-modal {
   width: min(680px, 100%);
   max-height: min(760px, calc(100vh - 36px));
@@ -674,6 +690,15 @@ select:focus {
   max-width: 260px;
 }
 
+.section-actions {
+  justify-content: flex-end;
+  margin-bottom: 0;
+}
+
+.table-actions {
+  margin: 0;
+}
+
 .job-card {
   display: grid;
   gap: 12px;
@@ -897,6 +922,25 @@ select:focus {
   margin: 0 0 10px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.review-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin: 0 0 10px;
+  border: 1px solid rgba(255, 206, 122, 0.35);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: #ffe7bd;
+  background: rgba(255, 206, 122, 0.08);
+  font-size: 12px;
+}
+
+.review-badge.rejected {
+  border-color: rgba(255, 122, 144, 0.35);
+  color: #ffd7de;
+  background: rgba(255, 122, 144, 0.08);
 }
 
 .application-remove {
