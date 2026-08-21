@@ -3399,7 +3399,7 @@ class AppHandler(BaseHTTPRequestHandler):
         with connect_db() as conn:
             rows = conn.execute(
                 """
-                SELECT applications.*, jobs.company, jobs.title, jobs.city, jobs.deadline, jobs.category,
+                SELECT applications.*, jobs.company, jobs.title, jobs.city, jobs.deadline, jobs.category, jobs.requirements,
                        jobs.company_type, jobs.batch, jobs.source, jobs.source_url, jobs.review_status, jobs.review_note
                 FROM applications
                 JOIN jobs ON jobs.id = applications.job_id
@@ -3432,11 +3432,13 @@ class AppHandler(BaseHTTPRequestHandler):
                     "interviewCompleted": utc_string(row["interview_completed_at"]) if row["interview_completed_at"] else "",
                     "updatedAt": utc_string(row["updated_at"]),
                     "job": {
+                        "id": row["job_id"],
                         "company": row["company"],
                         "title": row["title"],
                         "city": row["city"],
                         "deadline": row["deadline"],
                         "category": row["category"],
+                        "requirements": json.loads(row["requirements"] or "[]"),
                         "companyType": row["company_type"],
                         "batch": row["batch"],
                         "source": row["source"],

@@ -2374,12 +2374,19 @@ const App = {
         <p>${this.escape(item.job.city)} · ${this.escape(item.job.batch || "未标注批次")} · ${this.escape(item.job.companyType || "未分类")} · 截止 ${this.escape(item.job.deadline)}</p>
         ${reviewLabel ? `<div class="review-badge ${this.escape(item.job.reviewStatus)}">${this.escape(reviewLabel)}</div>` : ""}
         ${this.applicationCompletionBadge(item)}
-        ${actionLabel ? `
-          <div class="application-actions">
-            <a class="btn small application-action" href="${this.escape(actionUrl)}" target="_blank" rel="noopener noreferrer">${actionLabel}</a>
-            ${this.applicationStageButtons(item)}
-          </div>
-        ` : ""}
+        ${this.applicationActions(item, actionLabel, actionUrl)}
+      </div>
+    `;
+  },
+
+  applicationActions(item, actionLabel, actionUrl) {
+    const completed = this.applicationStageCompleted(item);
+    const stageButtons = this.applicationStageButtons(item);
+    if (!actionLabel && !stageButtons) return "";
+    return `
+      <div class="application-actions">
+        ${completed ? "" : actionLabel ? `<a class="btn small application-action" href="${this.escape(actionUrl)}" target="_blank" rel="noopener noreferrer">${actionLabel}</a>` : ""}
+        ${stageButtons}
       </div>
     `;
   },
@@ -2388,20 +2395,30 @@ const App = {
     if (item.status === "test") {
       const deadlineLabel = item.assessmentDeadlineAt ? `截止 ${this.formatTimestampShort(item.assessmentDeadlineAt)}` : "截止时间";
       const completed = Boolean(item.assessmentCompletedAt);
+      if (completed) {
+        return `<button class="btn small application-action success" onclick="App.toggleApplicationCompletion(${item.id}, 'assessment', false)">取消完成</button>`;
+      }
       return `
         <button class="btn small application-action" onclick="App.setApplicationDeadline(${item.id}, 'assessment')">${this.escape(deadlineLabel)}</button>
-        <button class="btn small application-action ${completed ? "success" : ""}" onclick="App.toggleApplicationCompletion(${item.id}, 'assessment', ${completed ? "false" : "true"})">${completed ? "取消完成" : "已完成"}</button>
+        <button class="btn small application-action" onclick="App.toggleApplicationCompletion(${item.id}, 'assessment', true)">已完成</button>
       `;
     }
     if (item.status === "interview") {
       const deadlineLabel = item.interviewDeadlineAt ? `面试 ${this.formatTimestampShort(item.interviewDeadlineAt)}` : "面试时间";
       const completed = Boolean(item.interviewCompletedAt);
+      if (completed) {
+        return `<button class="btn small application-action success" onclick="App.toggleApplicationCompletion(${item.id}, 'interview', false)">取消完成</button>`;
+      }
       return `
         <button class="btn small application-action" onclick="App.setApplicationDeadline(${item.id}, 'interview')">${this.escape(deadlineLabel)}</button>
-        <button class="btn small application-action ${completed ? "success" : ""}" onclick="App.toggleApplicationCompletion(${item.id}, 'interview', ${completed ? "false" : "true"})">${completed ? "取消完成" : "已完成"}</button>
+        <button class="btn small application-action" onclick="App.toggleApplicationCompletion(${item.id}, 'interview', true)">已完成</button>
       `;
     }
     return "";
+  },
+
+  applicationStageCompleted(item) {
+    return (item.status === "test" && item.assessmentCompletedAt) || (item.status === "interview" && item.interviewCompletedAt);
   },
 
   applicationCompletionBadge(item) {
@@ -2717,8 +2734,28 @@ const App = {
     ];
   },
 
+  interviewApplications() {
+    return this.state.applications.filter((item) => item.status === "interview" && item.job);
+  },
+
+  interviewJobFromApplication(jobId) {
+    const application = this.interviewApplications().find((item) => Number(item.jobId) === Number(jobId));
+    if (!application) return null;
+    return {
+      ...application.job,
+      id: application.jobId,
+      title: this.applicationPositionTitle(application) || application.job.title,
+      requirements: application.job.requirements || [],
+    };
+  },
+
   startInterview(jobId) {
-    const job = this.state.jobs.find((item) => item.id === jobId) || this.state.jobs[0];
+    const job = this.interviewJobFromApplication(jobId);
+    if (!job) {
+      this.setError("请先把岗位拖到投递看板的面试列，再开始模拟面试。");
+      this.render();
+      return;
+    }
     this.state.view = "interview";
     this.state.interview = {
       jobId: job?.id || null,
@@ -2731,9 +2768,11 @@ const App = {
   },
 
   renderInterview() {
-    const selectedJobId = this.state.interview?.jobId || this.state.jobs[0]?.id;
-    const job = this.state.jobs.find((item) => item.id === Number(selectedJobId));
+    const interviewApplications = this.interviewApplications();
+    const selectedJobId = this.state.interview?.jobId || interviewApplications[0]?.jobId || null;
+    const job = this.interviewJobFromApplication(selectedJobId);
     const interview = this.state.interview;
+    const canStart = Boolean(interviewApplications.length && selectedJobId);
     return `
       <section class="section-title">
         <div>
@@ -2743,12 +2782,15 @@ const App = {
       <section class="interview-board">
         <div class="panel">
           <div class="toolbar">
-            <select onchange="App.startInterview(Number(this.value))">
-              ${this.state.jobs.map((item) => `<option value="${item.id}" ${item.id === selectedJobId ? "selected" : ""}>${this.escape(item.company)} · ${this.escape(item.title)}</option>`).join("")}
+            <select onchange="App.startInterview(Number(this.value))" ${canStart ? "" : "disabled"}>
+              ${interviewApplications.map((item) => {
+                const title = this.applicationPositionTitle(item) || item.job.title;
+                return `<option value="${item.jobId}" ${Number(item.jobId) === Number(selectedJobId) ? "selected" : ""}>${this.escape(item.job.company)} · ${this.escape(title)}</option>`;
+              }).join("")}
             </select>
-            <button class="btn primary" onclick="App.startInterview(${selectedJobId})">开始面试</button>
+            <button class="btn primary" ${canStart ? `onclick="App.startInterview(${selectedJobId})"` : "disabled"}>开始面试</button>
           </div>
-          ${interview ? this.renderInterviewSession(job, interview) : `<div class="empty">选择岗位后开始。每题可语音回答，也可以直接输入文字。</div>`}
+          ${interview ? this.renderInterviewSession(job, interview) : canStart ? `<div class="empty">选择岗位后开始。每题可语音回答，也可以直接输入文字。</div>` : `<div class="empty">把岗位拖到投递看板的“面试”列后，这里才会出现。</div>`}
         </div>
         <aside class="panel">
           <h2 style="margin-top: 0;">历史报告</h2>
