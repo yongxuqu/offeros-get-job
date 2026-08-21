@@ -94,7 +94,7 @@ const LABEL_SELECTOR = [
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.3.7" });
+    sendResponse({ ok: true, version: "0.3.9" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -307,10 +307,13 @@ function getFieldContexts(element) {
   const contexts = [];
   addContext(contexts, "label", labelForId(element), 12);
   addContext(contexts, "label", element.closest("label")?.innerText, 11);
+  addContext(contexts, "moka-date", mokaDatePartLabel(element), 14);
+  addContext(contexts, "moka-label", mokaFieldLabel(element), 13);
   addContext(contexts, "label", componentLabel(element), 10);
   addContext(contexts, "table", tableHeaderText(element), 9);
   addContext(contexts, "placeholder", element.getAttribute("placeholder"), 8);
   addContext(contexts, "aria", element.getAttribute("aria-label"), 8);
+  addContext(contexts, "moka-section", mokaSectionHeadingText(element), 7);
   addContext(contexts, "section", sectionHeadingText(element), 6);
   addContext(contexts, "nearby", previousTextNode(element), 5);
   addContext(contexts, "attr", element.getAttribute("autocomplete"), 4);
@@ -341,6 +344,91 @@ function componentLabel(element) {
   const label = formItem.querySelector(LABEL_SELECTOR);
   if (label && !label.contains(element)) return label.innerText || label.textContent || "";
   return "";
+}
+
+function mokaFieldLabel(element) {
+  return nearbyLabelBeforeElement(element);
+}
+
+function mokaDatePartLabel(element) {
+  const unit = mokaDatePartUnit(element);
+  if (!unit) return "";
+  const section = mokaSectionHeadingText(element);
+  const rangeText = nearbyLabelBeforeElement(element);
+  const rangeContainer = closestDatePartContainer(element);
+  const parts = rangeContainer ? [...rangeContainer.querySelectorAll(FIELD_SELECTOR)].filter(mokaDatePartUnit) : [];
+  const partIndex = parts.indexOf(element);
+  const isEnd = parts.length >= 4 && partIndex >= 2;
+
+  if (/获奖/.test(section) || /获奖/.test(rangeText)) return `获奖时间 ${unit}`;
+  if (/教育|就读/.test(section) || /就读|入学|毕业/.test(rangeText)) return `${isEnd ? "教育结束时间" : "教育开始时间"} ${unit}`;
+  if (/实习/.test(section)) return `${isEnd ? "实习结束时间" : "实习开始时间"} ${unit}`;
+  if (/项目/.test(section)) return `${isEnd ? "项目结束时间" : "项目开始时间"} ${unit}`;
+  return "";
+}
+
+function mokaDatePartUnit(element) {
+  const placeholder = compactText(element.getAttribute?.("placeholder") || "");
+  if (placeholder === "年" || placeholder === "月") return placeholder;
+  return "";
+}
+
+function closestDatePartContainer(element) {
+  let fallback = null;
+  for (let node = element.parentElement; node; node = node.parentElement) {
+    const parts = [...node.querySelectorAll?.(FIELD_SELECTOR) || []].filter(mokaDatePartUnit);
+    if (!parts.includes(element)) continue;
+    if (parts.length >= 4) return node;
+    if (!fallback && parts.length >= 2) fallback = node;
+    if (parts.length > 8) break;
+  }
+  return fallback;
+}
+
+function nearbyLabelBeforeElement(element) {
+  let node = element;
+  for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {
+    let previous = node.previousElementSibling;
+    for (let hops = 0; previous && hops < 5; hops += 1, previous = previous.previousElementSibling) {
+      const text = labelTextFromNode(previous);
+      if (isUsableFieldLabel(text)) return text;
+    }
+  }
+  return "";
+}
+
+function mokaSectionHeadingText(element) {
+  let node = element;
+  for (let depth = 0; node && depth < 12; depth += 1, node = node.parentElement) {
+    let previous = node.previousElementSibling;
+    for (let hops = 0; previous && hops < 8; hops += 1, previous = previous.previousElementSibling) {
+      const section = sectionTitleFromText(labelTextFromNode(previous));
+      if (section) return section;
+    }
+  }
+  return "";
+}
+
+function sectionTitleFromText(text) {
+  const match = compactText(text).match(/(基础信息|个人信息|求职意向|工作经历|教育背景|实习经历|项目经验|项目经历|语言能力|自我描述|获奖经历|获奖信息)/);
+  return match?.[1] || "";
+}
+
+function labelTextFromNode(node) {
+  if (!node) return "";
+  const clone = node.cloneNode?.(true);
+  if (!clone) return "";
+  clone.querySelectorAll?.(`${FIELD_SELECTOR}, button, svg, img, script, style`).forEach((item) => item.remove());
+  return compactText(clone.innerText || clone.textContent || "");
+}
+
+function isUsableFieldLabel(text) {
+  const value = compactText(text);
+  if (!value || value.length > 28) return false;
+  if (/^[\-–—:：]+$/.test(value)) return false;
+  if (/^(添加|至今|请选择|请输入|内容|简介)$/.test(value)) return false;
+  if (/^[\uE000-\uF8FF\s]+$/.test(value)) return false;
+  return /[\u4e00-\u9fa5A-Za-z]/.test(value);
 }
 
 function tableHeaderText(element) {
@@ -384,7 +472,7 @@ function previousTextNode(element) {
 }
 
 function displayLabel(contexts, element) {
-  const labelContext = contexts.find((item) => ["label", "table", "placeholder", "aria", "nearby"].includes(item.source));
+  const labelContext = contexts.find((item) => ["label", "moka-date", "moka-label", "table", "placeholder", "aria", "nearby"].includes(item.source));
   return compactText(labelContext?.text || element.getAttribute("name") || element.id || element.tagName.toLowerCase());
 }
 
@@ -463,7 +551,8 @@ function elementTypeBonus(field, element, type) {
   if (type === "radio" && field === "profile.gender") bonus += 24;
   if (element.tagName === "SELECT" && ["profile.gender", "profile.idType", "profile.phoneType", "education.0.degree", "education.0.rank"].includes(field)) bonus += 16;
   if (element.tagName === "TEXTAREA" && ["internships", "projects", "awards", "selfDescription", "internships.0.description", "projects.0.description", "awards.0.description"].includes(field)) bonus += 22;
-  if (element.tagName !== "TEXTAREA" && ["internships", "projects", "awards", "selfDescription", "internships.0.description", "projects.0.description", "awards.0.description"].includes(field)) bonus -= 28;
+  if (element.tagName !== "TEXTAREA" && ["internships", "projects", "awards", "portfolios"].includes(field)) bonus -= 90;
+  if (element.tagName !== "TEXTAREA" && ["selfDescription", "internships.0.description", "projects.0.description", "awards.0.description"].includes(field)) bonus -= 28;
   return bonus;
 }
 
@@ -479,6 +568,7 @@ function guardBonus(field, normalizedAll, element, type) {
   const hasProject = /项目|project/.test(normalizedAll);
   const hasAward = /获奖|奖项|奖学金|竞赛|award/.test(normalizedAll);
   const hasPortfolio = /作品|主页|portfolio|website|链接|网址|提取码|密码/.test(normalizedAll);
+  const mokaSection = normalize(mokaSectionHeadingText(element));
   const isSplitNameField = field === "profile.familyName" || field === "profile.givenName";
   const hasSplitNameSignal = /(^姓$|^名$|姓氏|lastname|familyname|surname|firstname|givenname)/.test(normalizedAll);
   const isInternshipField = field.startsWith("internships.");
@@ -496,12 +586,22 @@ function guardBonus(field, normalizedAll, element, type) {
   if (field === "profile.currentLocation" && /就读|学校|院校/.test(normalizedAll)) bonus -= 70;
   if (field === "education.0.studyLocation" && /就读|学校|院校/.test(normalizedAll)) bonus += 28;
   if (field.startsWith("education.") && hasEducation) bonus += 18;
+  if (field.startsWith("education.") && /教育背景/.test(mokaSection)) bonus += 38;
   if (field.startsWith("education.") && !hasEducation && /开始|结束|时间|date/.test(normalizedAll)) bonus -= 35;
   if (field === "education.0.schoolName" && hasCompany) bonus -= 55;
+  if (field === "education.0.degree" && /最高学历/.test(normalizedAll)) bonus += 28;
+  if (field.startsWith("internships.") && /实习经历/.test(mokaSection)) bonus += 38;
+  if (field.startsWith("internships.") && /工作经历/.test(mokaSection) && !/实习/.test(mokaSection)) bonus -= 95;
+  if (field.startsWith("internships.") && /最近公司|当前薪资|期望薪资|期望城市/.test(normalizedAll)) bonus -= 95;
+  if (field === "internships" && element.tagName !== "TEXTAREA") bonus -= 120;
   if (isInternshipField && !hasWork && !/公司|单位|职位|岗位|职责/.test(normalizedAll)) bonus -= 72;
   if (isInternshipField && (hasEducation || hasProject || hasAward || hasPortfolio) && !hasWork) bonus -= 50;
+  if (field.startsWith("projects.") && /项目经验|项目经历/.test(mokaSection)) bonus += 38;
+  if (field === "projects" && element.tagName !== "TEXTAREA") bonus -= 120;
   if (isProjectField && !hasProject) bonus -= 72;
   if (isProjectField && (hasEducation || hasWork || hasAward) && !hasProject) bonus -= 50;
+  if (field.startsWith("awards.") && /获奖经历|获奖信息/.test(mokaSection)) bonus += 38;
+  if (field === "awards" && element.tagName !== "TEXTAREA") bonus -= 120;
   if (isAwardField && !hasAward) bonus -= 72;
   if (isPortfolioField && !hasPortfolio) bonus -= 72;
   if (field === "projects.0.link" && !hasProject) bonus -= 64;
@@ -913,6 +1013,8 @@ function formatNestedValue(value) {
 function normalizeValueForElement(element, value, extraText = "") {
   const raw = String(value || "").trim();
   const type = (element.getAttribute("type") || "").toLowerCase();
+  const datePart = datePartValueForElement(element, raw, extraText);
+  if (datePart !== "") return datePart;
   if (wantsMonthValue(element, extraText)) {
     const match = raw.match(/(20\d{2})[-/.年](\d{1,2})/);
     if (match) return `${match[1]}-${String(match[2]).padStart(2, "0")}`;
@@ -926,6 +1028,15 @@ function normalizeValueForElement(element, value, extraText = "") {
     if (match) return `${match[1]}-${String(match[2]).padStart(2, "0")}`;
   }
   return raw;
+}
+
+function datePartValueForElement(element, raw, extraText = "") {
+  const unit = mokaDatePartUnit(element) || compactText(extraText).match(/\b(年|月)\b/)?.[1] || "";
+  if (!unit) return "";
+  const match = raw.match(/(20\d{2})[-/.年](\d{1,2})/);
+  if (!match) return "";
+  if (unit === "年") return match[1];
+  return String(Number(match[2]));
 }
 
 function wantsMonthValue(element, extraText = "") {
