@@ -64,6 +64,13 @@ const CUSTOM_CONTROL_SELECTOR = [
   ".ant-cascader-picker",
   "[role='combobox']"
 ].join(",");
+const CUSTOM_OPTION_SELECTOR = [
+  ".el-select-dropdown__item:not(.is-disabled)",
+  ".el-cascader-node:not(.is-disabled)",
+  ".ant-select-item-option:not(.ant-select-item-option-disabled)",
+  ".ant-cascader-menu-item:not(.ant-cascader-menu-item-disabled)",
+  "[role='option']:not([aria-disabled='true'])"
+].join(",");
 const FORM_ITEM_SELECTOR = ".ant-form-item, .ant-row, .el-form-item, .el-form-item--default, .form-item, .form-group, .field, .moka-form-item, .moka-form-row, .form-row, li, td";
 const LABEL_SELECTOR = [
   ".ant-form-item-label",
@@ -78,7 +85,7 @@ const LABEL_SELECTOR = [
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.3.3" });
+    sendResponse({ ok: true, version: "0.3.4" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -86,13 +93,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message.type === "OFFEROS_FILL" || message.type === "ZHIXU_FILL") {
-    sendResponse({
-      mappings: fillFields(
+    fillFields(
         message.profile || {},
         message.selectedMappings || null,
         message.selectedIndexes || null
       )
-    });
+      .then((mappings) => sendResponse({ mappings }))
+      .catch((error) => sendResponse({ error: error.message || "fill_failed", mappings: [] }));
     return true;
   }
   return false;
@@ -102,9 +109,12 @@ function buildMappings(profile) {
   return getFields().map((element, index) => describeField(element, index, profile));
 }
 
-function fillFields(profile, selectedMappings, selectedIndexes) {
+async function fillFields(profile, selectedMappings, selectedIndexes) {
   const selected = normalizeSelectedMappings(selectedMappings, selectedIndexes);
-  return getFields().map((element, index) => {
+  const mappings = [];
+  const fields = getFields();
+  for (let index = 0; index < fields.length; index += 1) {
+    const element = fields[index];
     let mapping = describeField(element, index, profile);
     const selectedField = selected.get(index);
     if (selectedField !== undefined) {
@@ -112,11 +122,12 @@ function fillFields(profile, selectedMappings, selectedIndexes) {
     }
     const shouldFill = selected.has(index) && mapping.field && mapping.value && mapping.canFill;
     if (shouldFill) {
-      mapping.filled = applyValue(element, mapping.value);
+      mapping.filled = await applyValue(element, mapping.value);
       mapping.currentValue = getElementValue(element);
     }
-    return mapping;
-  });
+    mappings.push(mapping);
+  }
+  return mappings;
 }
 
 function normalizeSelectedMappings(selectedMappings, selectedIndexes) {
@@ -148,12 +159,13 @@ function describeField(element, index, profile) {
     score: Math.round(inferred.score || 0),
     reason: inferred.reason,
     sensitive: inferred.sensitive,
-    value: normalizeValueForElement(element, value),
+    value: normalizeValueForElement(element, value, label),
     currentValue: getElementValue(element),
     elementType: elementTypeName(element),
-    elementFillable: isFillableElement(element),
-    canFill: Boolean(inferred.field && value && isFillableElement(element)),
-    canAutoSelect: Boolean(inferred.field && value && inferred.score >= 72 && !inferred.sensitive && isFillableElement(element)),
+    elementFillable: canAttemptFillElement(element),
+    elementCustom: isReadonlyCustomControl(element),
+    canFill: Boolean(inferred.field && value && canAttemptFillElement(element)),
+    canAutoSelect: Boolean(inferred.field && value && inferred.score >= 72 && !inferred.sensitive && canAttemptFillElement(element)),
     filled: false
   };
 }
@@ -174,15 +186,16 @@ function withManualField(mapping, profile, field) {
   const meta = FIELD_META[field] || { field, label: field, sensitive: false };
   const element = findElementByMapping(mapping);
   const value = getProfileValue(profile, field);
-  const elementFillable = isFillableElement(element);
+  const elementFillable = canAttemptFillElement(element);
   return {
     ...mapping,
     field,
     fieldLabel: meta.label,
     confidence: mapping.field === field ? mapping.confidence : "手动",
     sensitive: Boolean(meta.sensitive),
-    value: normalizeValueForElement(element, value),
+    value: normalizeValueForElement(element, value, mapping.label),
     elementFillable,
+    elementCustom: isReadonlyCustomControl(element),
     canFill: Boolean(value && elementFillable),
     canAutoSelect: false
   };
@@ -194,7 +207,7 @@ function findElementByMapping(mapping) {
 
 function getFields() {
   const seenRadioGroups = new Set();
-  const candidates = [...document.querySelectorAll(FIELD_SELECTOR)].filter((element) => {
+  const candidates = getFieldDocuments().flatMap((doc) => [...doc.querySelectorAll(FIELD_SELECTOR)]).filter((element) => {
     const type = (element.getAttribute("type") || "").toLowerCase();
     const hidden = isHiddenElement(element);
     if (type === "radio" && element.name) {
@@ -205,6 +218,18 @@ function getFields() {
     return !(hidden || element.disabled || readonly || IGNORED_TYPES.has(type));
   });
   return dedupeFieldCandidates(candidates);
+}
+
+function getFieldDocuments() {
+  const docs = [document];
+  document.querySelectorAll("iframe, frame").forEach((frame) => {
+    try {
+      if (frame.contentDocument && !docs.includes(frame.contentDocument)) docs.push(frame.contentDocument);
+    } catch {
+      // Cross-origin frames are handled by their own content script when the browser allows it.
+    }
+  });
+  return docs;
 }
 
 function isHiddenElement(element) {
@@ -294,7 +319,7 @@ function addContext(contexts, source, value, weight) {
 
 function labelForId(element) {
   if (!element.id) return "";
-  return document.querySelector(`label[for="${CSS.escape(element.id)}"]`)?.innerText || "";
+  return (element.ownerDocument || document).querySelector(`label[for="${CSS.escape(element.id)}"]`)?.innerText || "";
 }
 
 function componentLabel(element) {
@@ -476,15 +501,18 @@ function guardBonus(field, normalizedAll, element, type) {
   return bonus;
 }
 
-function applyValue(element, value) {
+async function applyValue(element, value) {
   const type = (element.getAttribute("type") || "").toLowerCase();
-  if (!isFillableElement(element)) return false;
+  if (!canAttemptFillElement(element)) return false;
+  if (isReadonlyCustomControl(element)) {
+    return fillCustomControl(element, value);
+  }
   if (element.tagName === "SELECT") {
     const option = findBestOption([...element.options], value);
     if (!option) return false;
     setNativeValue(element, option.value);
   } else if (type === "radio") {
-    const group = element.name ? [...document.querySelectorAll(`input[type="radio"][name="${CSS.escape(element.name)}"]`)] : [element];
+    const group = element.name ? [...(element.ownerDocument || document).querySelectorAll(`input[type="radio"][name="${CSS.escape(element.name)}"]`)] : [element];
     const normalizedValue = normalize(value);
     const target = group.find((item) => optionLabel(item).includes(normalizedValue) || normalize(item.value) === normalizedValue);
     if (!target) return false;
@@ -503,6 +531,86 @@ function applyValue(element, value) {
   }
   dispatchInputEvents(element);
   return true;
+}
+
+async function fillCustomControl(element, value) {
+  const formattedValue = normalizeValueForElement(element, value);
+  const control = element.closest(CUSTOM_CONTROL_SELECTOR) || element;
+  clickElement(control);
+  if (control !== element) clickElement(element);
+  await wait(180);
+
+  const option = findBestCustomOption(formattedValue, element.ownerDocument || document) || findBestCustomOption(value, element.ownerDocument || document);
+  if (option) {
+    clickElement(option);
+    await wait(160);
+    dispatchInputEvents(element);
+    return true;
+  }
+
+  if (isDateLikeElement(element)) {
+    setNativeValue(element, formattedValue);
+    dispatchInputEvents(element);
+    await wait(80);
+    return normalize(getElementValue(element)) === normalize(formattedValue);
+  }
+
+  return false;
+}
+
+function clickElement(element) {
+  if (!element) return;
+  element.scrollIntoView?.({ block: "center", inline: "center" });
+  element.focus?.();
+  ["pointerdown", "mousedown", "mouseup"].forEach((type) => {
+    element.dispatchEvent?.(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+  });
+  if (typeof element.click === "function") {
+    element.click();
+  } else {
+    element.dispatchEvent?.(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+  }
+}
+
+function findBestCustomOption(value, rootDocument = document) {
+  const normalizedValue = normalize(value);
+  const docs = rootDocument === document ? [document] : [rootDocument, document];
+  const options = docs.flatMap((doc) => [...doc.querySelectorAll(CUSTOM_OPTION_SELECTOR)])
+    .filter(isVisibleElement)
+    .map((element) => ({ element, text: customOptionText(element), normalized: normalize(customOptionText(element)) }))
+    .filter((item) => item.normalized);
+  const matched = (
+    options.find((item) => item.normalized === normalizedValue) ||
+    options.find((item) => item.normalized.includes(normalizedValue) || normalizedValue.includes(item.normalized))
+  );
+  return matched?.element || null;
+}
+
+function customOptionText(element) {
+  return compactText([
+    element.innerText,
+    element.textContent,
+    element.getAttribute?.("aria-label"),
+    element.getAttribute?.("title")
+  ].filter(Boolean).join(" "));
+}
+
+function isVisibleElement(element) {
+  return !(element.offsetParent === null && element.getClientRects().length === 0);
+}
+
+function isDateLikeElement(element) {
+  const text = normalize([
+    element.getAttribute("placeholder"),
+    element.getAttribute("aria-label"),
+    componentLabel(element),
+    labelForId(element)
+  ].filter(Boolean).join(" "));
+  return Boolean(element.closest?.(".el-date-editor, .ant-picker") || /日期|时间|年月|yyyymm|yyyy/.test(text));
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function findBestOption(options, value) {
@@ -587,9 +695,13 @@ function formatNestedValue(value) {
   return "";
 }
 
-function normalizeValueForElement(element, value) {
+function normalizeValueForElement(element, value, extraText = "") {
   const raw = String(value || "").trim();
   const type = (element.getAttribute("type") || "").toLowerCase();
+  if (wantsMonthValue(element, extraText)) {
+    const match = raw.match(/(20\d{2})[-/.年](\d{1,2})/);
+    if (match) return `${match[1]}-${String(match[2]).padStart(2, "0")}`;
+  }
   if (type === "date") {
     const match = raw.match(/(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})/);
     if (match) return `${match[1]}-${String(match[2]).padStart(2, "0")}-${String(match[3]).padStart(2, "0")}`;
@@ -601,9 +713,19 @@ function normalizeValueForElement(element, value) {
   return raw;
 }
 
-function isFillableElement(element) {
+function wantsMonthValue(element, extraText = "") {
+  const text = normalize([
+    element.getAttribute("placeholder"),
+    element.getAttribute("aria-label"),
+    componentLabel(element),
+    labelForId(element),
+    extraText
+  ].filter(Boolean).join(" "));
+  return /yyyymm|年月|入学时间|毕业时间|开始年月|结束年月/.test(text);
+}
+
+function canAttemptFillElement(element) {
   if (element.tagName === "SELECT") return element.options.length > 0;
-  if (isReadonlyCustomControl(element)) return false;
   return true;
 }
 
@@ -614,7 +736,7 @@ function elementTypeName(element) {
 }
 
 function optionLabel(element) {
-  const idLabel = element.id ? document.querySelector(`label[for="${CSS.escape(element.id)}"]`)?.innerText : "";
+  const idLabel = element.id ? (element.ownerDocument || document).querySelector(`label[for="${CSS.escape(element.id)}"]`)?.innerText : "";
   return normalize([idLabel, element.closest("label")?.innerText, element.value].filter(Boolean).join(" "));
 }
 

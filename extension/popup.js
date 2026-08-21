@@ -243,7 +243,7 @@ async function injectContentScript(tabId) {
     throw new Error("missing_scripting_permission");
   }
   await chrome.scripting.executeScript({
-    target: { tabId },
+    target: { tabId, allFrames: true },
     files: ["content.js"]
   });
 }
@@ -280,7 +280,7 @@ function renderMappings(mappings, afterFill = false) {
 
 function mappingRow(item, afterFill) {
   const field = selectedField(item);
-  const value = profileValue(readProfile(), field);
+  const value = item.value || profileValue(readProfile(), field);
   const canFill = Boolean(item.canFill);
   const disabled = !field || !value || !canFill;
   const state = mappingState(item, field, value, afterFill);
@@ -307,7 +307,8 @@ function mappingState(item, field, value, afterFill) {
   if (afterFill) return item.filled ? { label: "已填", className: "ok" } : { label: "未填", className: "muted" };
   if (!field) return { label: "未识别", className: "muted" };
   if (!value) return { label: "无数据", className: "muted" };
-  if (!item.canFill) return { label: "需手动", className: "warn" };
+  if (item.elementCustom && item.canFill) return { label: "自动选择", className: "ok" };
+  if (!item.canFill) return { label: "需处理", className: "warn" };
   return { label: item.confidence || "已识别", className: "" };
 }
 
@@ -315,7 +316,8 @@ function mappingHint(item, field, value, sensitive) {
   if (sensitive) return "敏感字段，需手动勾选";
   if (!field) return "";
   if (!value) return "本地简历没有这个字段";
-  if (!item.canFill) return "网页控件需手动选择";
+  if (item.elementCustom && item.canFill) return "网页控件会自动选择";
+  if (!item.canFill) return "网页控件无法自动处理";
   return "";
 }
 

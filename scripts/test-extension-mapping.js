@@ -31,9 +31,21 @@ class FakeElement {
     return true;
   }
 
+  scrollIntoView() {
+    return true;
+  }
+
+  focus() {
+    return true;
+  }
+
+  click() {
+    return true;
+  }
+
   closest(selector) {
     if (this.customControl && selector.includes(".el-select")) {
-      return {};
+      return this;
     }
     if (selector.includes("section") && this.sectionTitle) {
       return {
@@ -49,12 +61,30 @@ class FakeElement {
 }
 
 function loadContentScript(fields, labels) {
+  const customOptions = ["前5%", "前10%", "前20%"].map((text) => ({
+    innerText: text,
+    textContent: text,
+    offsetParent: {},
+    getClientRects: () => [1],
+    getAttribute: () => "",
+    dispatchEvent: () => true,
+    scrollIntoView: () => true,
+    focus: () => true,
+    click: () => {
+      const target = fields.find((field) => field.id === "rankSelect");
+      if (target) target.value = text;
+    }
+  }));
   const context = {
     chrome: { runtime: { onMessage: { addListener: () => {} } } },
     CSS: { escape: (value) => String(value) },
     Event: class {},
+    MouseEvent: class {},
+    setTimeout,
+    window: {},
     document: {
       querySelectorAll: (selector) => {
+        if (selector.includes("el-select-dropdown__item") || selector.includes("[role='option']")) return customOptions;
         if (selector.includes("input")) return fields;
         return [];
       },
@@ -117,6 +147,7 @@ const profile = {
   "projects.0.link": "https://example.com/project"
 };
 
+(async () => {
 const contentScript = loadContentScript(fields, labels);
 const { buildMappings, fillFields } = contentScript;
 const mappings = buildMappings(profile);
@@ -157,14 +188,14 @@ if (byId.idNumber?.canAutoSelect) {
 const selectedMappings = mappings
   .map((mapping, index) => ({ index, field: expectations[fields[index].id] }))
   .filter((item) => item.field && item.field !== "profile.idNumber");
-fillFields(profile, selectedMappings);
+await fillFields(profile, selectedMappings);
 
 const fillExpectations = {
   realName: "张同学",
   familyName: "张",
   givenName: "同学",
   school: "某某大学",
-  rankSelect: "",
+  rankSelect: "前10%",
   company: "星云科技",
   position: "产品运营实习生",
   projectStart: "2025-01-01",
@@ -181,9 +212,13 @@ for (const [id, expected] of Object.entries(fillExpectations)) {
   }
 }
 
-if (byId.rankSelect?.canFill) {
+if (!byId.rankSelect?.canFill || !byId.rankSelect?.canAutoSelect) {
   failed = true;
-  console.error("自定义只读下拉不应该默认自动填充");
+  console.error("自定义只读下拉应该默认自动填充");
 }
 
 if (failed) process.exit(1);
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
