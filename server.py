@@ -2627,6 +2627,14 @@ def flatten_resume_fields(resume: dict) -> dict:
     profile = resume.get("profile") or {}
     education = resume.get("education") or []
     first_education = education[0] if education else {}
+    internships = resume.get("internships") or []
+    first_internship = internships[0] if internships else {}
+    projects = resume.get("projects") or []
+    first_project = projects[0] if projects else {}
+    awards = resume.get("awards") or []
+    first_award = awards[0] if awards else {}
+    portfolios = resume.get("portfolios") or []
+    first_portfolio = portfolios[0] if portfolios else {}
     verifier = resume.get("verifier") or {}
     fields = {
         "profile.name": profile.get("name", ""),
@@ -2652,10 +2660,27 @@ def flatten_resume_fields(resume: dict) -> dict:
         "education.0.rank": first_education.get("rank", ""),
         "education.0.gpa": first_education.get("gpa", ""),
         "education.0.gpaBase": first_education.get("gpaBase", ""),
-        "internships": format_list_items(resume.get("internships") or [], ["company", "position", "startDate", "endDate", "description"]),
-        "projects": format_list_items(resume.get("projects") or [], ["name", "role", "startDate", "endDate", "description", "link"]),
-        "awards": format_list_items(resume.get("awards") or [], ["type", "date", "description"]),
-        "portfolios": format_list_items(resume.get("portfolios") or [], ["name", "link", "password"]),
+        "internships.0.company": first_internship.get("company", ""),
+        "internships.0.position": first_internship.get("position", ""),
+        "internships.0.startDate": first_internship.get("startDate", ""),
+        "internships.0.endDate": first_internship.get("endDate", ""),
+        "internships.0.description": first_internship.get("description", ""),
+        "internships": format_list_items(internships, ["company", "position", "startDate", "endDate", "description"]),
+        "projects.0.name": first_project.get("name", ""),
+        "projects.0.role": first_project.get("role", ""),
+        "projects.0.startDate": first_project.get("startDate", ""),
+        "projects.0.endDate": first_project.get("endDate", ""),
+        "projects.0.link": first_project.get("link", ""),
+        "projects.0.description": first_project.get("description", ""),
+        "projects": format_list_items(projects, ["name", "role", "startDate", "endDate", "description", "link"]),
+        "awards.0.type": first_award.get("type", ""),
+        "awards.0.date": first_award.get("date", ""),
+        "awards.0.description": first_award.get("description", ""),
+        "awards": format_list_items(awards, ["type", "date", "description"]),
+        "portfolios.0.name": first_portfolio.get("name", ""),
+        "portfolios.0.link": first_portfolio.get("link", ""),
+        "portfolios.0.password": first_portfolio.get("password", ""),
+        "portfolios": format_list_items(portfolios, ["name", "link", "password"]),
         "selfDescription": resume.get("selfDescription", ""),
         "verifier.name": verifier.get("name", ""),
         "verifier.identity": verifier.get("identity", ""),

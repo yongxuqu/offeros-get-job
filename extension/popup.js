@@ -1,3 +1,57 @@
+const FIELD_OPTIONS = [
+  ["profile.name", "姓名"],
+  ["profile.gender", "性别"],
+  ["profile.countryRegion", "国家/地区"],
+  ["profile.idType", "证件类型"],
+  ["profile.idNumber", "证件号"],
+  ["profile.phoneType", "手机号码类型"],
+  ["profile.phone", "手机号"],
+  ["profile.email", "邮箱"],
+  ["profile.currentLocation", "当前所在地"],
+  ["profile.wechat", "微信号"],
+  ["profile.qq", "QQ号"],
+  ["profile.emergencyContact", "紧急联系人"],
+  ["profile.emergencyPhone", "紧急联系人电话"],
+  ["education.0.degree", "学历"],
+  ["education.0.schoolName", "学校名称"],
+  ["education.0.studyLocation", "就读地"],
+  ["education.0.startDate", "教育开始时间"],
+  ["education.0.endDate", "教育结束时间"],
+  ["education.0.college", "院系"],
+  ["education.0.major", "专业"],
+  ["education.0.rank", "成绩排名"],
+  ["education.0.gpa", "GPA"],
+  ["education.0.gpaBase", "GPA Base"],
+  ["internships.0.company", "第一段实习公司"],
+  ["internships.0.position", "第一段实习职位"],
+  ["internships.0.startDate", "第一段实习开始时间"],
+  ["internships.0.endDate", "第一段实习结束时间"],
+  ["internships.0.description", "第一段实习描述"],
+  ["internships", "实习经历"],
+  ["projects.0.name", "第一段项目名称"],
+  ["projects.0.role", "第一段项目角色"],
+  ["projects.0.startDate", "第一段项目开始时间"],
+  ["projects.0.endDate", "第一段项目结束时间"],
+  ["projects.0.link", "第一段项目链接"],
+  ["projects.0.description", "第一段项目描述"],
+  ["projects", "项目经历"],
+  ["awards.0.type", "第一条获奖类型"],
+  ["awards.0.date", "第一条获奖时间"],
+  ["awards.0.description", "第一条奖项说明"],
+  ["awards", "获奖信息"],
+  ["portfolios.0.name", "第一项作品名称"],
+  ["portfolios.0.link", "第一项作品链接"],
+  ["portfolios.0.password", "第一项作品提取码"],
+  ["portfolios", "作品主页"],
+  ["selfDescription", "自我描述"],
+  ["verifier.name", "资料证明人"],
+  ["verifier.identity", "证明人身份"],
+  ["verifier.phone", "证明人电话"]
+];
+
+const SENSITIVE_FIELDS = new Set(["profile.idNumber"]);
+const FIELD_LABELS = Object.fromEntries(FIELD_OPTIONS);
+
 const defaultProfile = {
   "profile.name": "张同学",
   "profile.gender": "女",
@@ -16,8 +70,17 @@ const defaultProfile = {
   "education.0.schoolName": "某某大学",
   "education.0.college": "管理学院",
   "education.0.major": "信息管理与信息系统",
+  "internships.0.company": "星云科技",
+  "internships.0.position": "产品运营实习生",
+  "internships.0.description": "负责活动策划、用户分层和数据复盘。",
   "internships": "星云科技 产品运营实习生：负责活动策划、用户分层和数据复盘。",
+  "projects.0.name": "校园二手交易平台",
+  "projects.0.role": "产品负责人",
+  "projects.0.description": "负责需求调研、PRD、原型设计和数据分析，发布转化提升 18%。",
   "projects": "校园二手交易平台：负责需求调研、PRD、原型设计和数据分析，发布转化提升 18%。",
+  "portfolios.0.name": "产品作品集",
+  "portfolios.0.link": "https://example.com/portfolio",
+  "portfolios.0.password": "2026",
   "portfolios": "产品作品集：https://example.com/portfolio 提取码：2026"
 };
 
@@ -30,6 +93,7 @@ const syncMetaEl = document.querySelector("#sync-meta");
 const mappingCountEl = document.querySelector("#mapping-count");
 
 let currentMappings = [];
+let currentHost = "";
 
 chrome.storage.local.get(
   ["offerosProfile", "offerosServerBase", "offerosPluginToken", "offerosLastSync", "zhixuProfile", "zhixuServerBase", "zhixuPluginToken"],
@@ -86,7 +150,8 @@ document.querySelector("#scan").addEventListener("click", async () => {
     const profile = readProfile();
     showMessage("正在扫描当前页面...");
     const response = await sendToTab({ type: "OFFEROS_PREVIEW", profile });
-    currentMappings = response?.mappings || [];
+    currentHost = await activeHost();
+    currentMappings = await applySavedOverrides(response?.mappings || [], profile);
     renderMappings(currentMappings);
   } catch (error) {
     showMessage(`扫描失败：${tabErrorLabel(error.message)}`, "error");
@@ -98,20 +163,31 @@ document.querySelector("#fill").addEventListener("click", async () => {
     const profile = readProfile();
     if (!currentMappings.length) {
       const response = await sendToTab({ type: "OFFEROS_PREVIEW", profile });
-      currentMappings = response?.mappings || [];
+      currentHost = await activeHost();
+      currentMappings = await applySavedOverrides(response?.mappings || [], profile);
     }
-    const selectedIndexes = selectedMappingIndexes();
-    if (!selectedIndexes.length) {
+    const selectedMappings = selectedMappingPayload();
+    if (!selectedMappings.length) {
       showMessage("请先选择要填充的字段", "error");
       return;
     }
-    const response = await sendToTab({ type: "OFFEROS_FILL", profile, selectedIndexes });
-    currentMappings = response?.mappings || [];
+    const response = await sendToTab({ type: "OFFEROS_FILL", profile, selectedMappings });
+    currentMappings = await applySavedOverrides(response?.mappings || [], profile);
     renderMappings(currentMappings, true);
     syncMetaEl.textContent = `已填充 ${currentMappings.filter((item) => item.filled).length} 个字段`;
   } catch (error) {
     showMessage(`填充失败：${tabErrorLabel(error.message)}`, "error");
   }
+});
+
+resultEl.addEventListener("change", async (event) => {
+  if (!event.target.matches(".field-select")) return;
+  const index = Number(event.target.dataset.index);
+  const mapping = currentMappings.find((item) => Number(item.index) === index);
+  if (!mapping) return;
+  updateMappingField(mapping, event.target.value, readProfile());
+  await saveOverride(mapping);
+  renderMappings(currentMappings);
 });
 
 function readProfile() {
@@ -136,13 +212,39 @@ async function sendToTab(message) {
   return chrome.tabs.sendMessage(tab.id, message);
 }
 
+async function activeHost() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  try {
+    return new URL(tab?.url || "").host || "local";
+  } catch {
+    return "local";
+  }
+}
+
 function cleanServerBase() {
   return serverBaseEl.value.trim().replace(/\/+$/, "");
 }
 
+async function applySavedOverrides(mappings, profile) {
+  const host = currentHost || await activeHost();
+  const overrides = await loadOverrides(host);
+  return mappings.map((item) => {
+    const mapping = {
+      ...item,
+      autoField: item.field,
+      autoFieldLabel: item.fieldLabel,
+      autoConfidence: item.confidence
+    };
+    if (overrides[item.signature] !== undefined) {
+      updateMappingField(mapping, overrides[item.signature], profile, true);
+    }
+    return mapping;
+  });
+}
+
 function renderMappings(mappings, afterFill = false) {
   const visible = mappings.filter((item) => item.field || item.label);
-  const fillableCount = visible.filter((item) => item.field && item.value).length;
+  const fillableCount = visible.filter((item) => selectedField(item) && profileValue(readProfile(), selectedField(item))).length;
   mappingCountEl.textContent = `${fillableCount}/${visible.length} 项`;
   resultEl.innerHTML = visible.length
     ? visible.map((item) => mappingRow(item, afterFill)).join("")
@@ -150,24 +252,97 @@ function renderMappings(mappings, afterFill = false) {
 }
 
 function mappingRow(item, afterFill) {
-  const checked = item.field && item.value && item.confidence !== "低" && !item.sensitive;
-  const disabled = !item.field || !item.value;
-  const state = item.filled ? "已填充" : item.field ? item.confidence || "已识别" : "未识别";
+  const field = selectedField(item);
+  const value = profileValue(readProfile(), field);
+  const disabled = !field || !value;
+  const state = item.filled ? "已填充" : field ? item.confidence || "已识别" : "未识别";
+  const sensitive = SENSITIVE_FIELDS.has(field) || item.sensitive;
+  const checked = Boolean(item.canAutoSelect || item.manual) && Boolean(field && value) && !sensitive;
   return `
-    <label class="mapping-row ${item.filled ? "filled" : ""} ${disabled ? "disabled" : ""}">
+    <div class="mapping-row ${item.filled ? "filled" : ""} ${disabled ? "disabled" : ""} ${item.manual ? "manual" : ""}">
       <input type="checkbox" data-index="${item.index}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""} />
       <span class="mapping-main">
-        <strong>${escapeHtml(item.label || "未命名字段")}</strong>
-        <small>${escapeHtml(item.fieldLabel || item.field || "未匹配")} · ${escapeHtml(item.elementType || "")}${item.sensitive ? " · 敏感" : ""}</small>
-        <em>${escapeHtml(previewValue(item.value || item.currentValue || ""))}</em>
+        <strong title="${escapeHtml(item.label || "未命名字段")}">${escapeHtml(item.label || "未命名字段")}</strong>
+        <select class="field-select" data-index="${item.index}">
+          ${fieldOptionsHtml(field)}
+        </select>
+        <small>${escapeHtml(item.reason || item.autoFieldLabel || item.autoField || "未匹配")}${sensitive ? " · 敏感" : ""}</small>
+        <em>${escapeHtml(previewValue(value || item.currentValue || ""))}</em>
       </span>
       <span class="mapping-state">${afterFill ? (item.filled ? "已填" : "未填") : escapeHtml(state)}</span>
-    </label>
+    </div>
   `;
 }
 
-function selectedMappingIndexes() {
-  return [...resultEl.querySelectorAll('input[type="checkbox"][data-index]:checked')].map((item) => Number(item.dataset.index));
+function fieldOptionsHtml(selected) {
+  return [
+    `<option value="" ${selected ? "" : "selected"}>不填充</option>`,
+    ...FIELD_OPTIONS.map(([field, label]) => `<option value="${escapeHtml(field)}" ${field === selected ? "selected" : ""}>${escapeHtml(label)}</option>`)
+  ].join("");
+}
+
+function selectedMappingPayload() {
+  return [...resultEl.querySelectorAll('input[type="checkbox"][data-index]:checked')]
+    .map((item) => {
+      const index = Number(item.dataset.index);
+      const select = resultEl.querySelector(`.field-select[data-index="${index}"]`);
+      return { index, field: select?.value || "" };
+    })
+    .filter((item) => item.field);
+}
+
+function selectedField(item) {
+  return item.field || "";
+}
+
+function updateMappingField(mapping, field, profile, fromSaved = false) {
+  mapping.field = field || "";
+  mapping.fieldLabel = FIELD_LABELS[field] || "";
+  mapping.sensitive = SENSITIVE_FIELDS.has(field);
+  mapping.value = field ? profileValue(profile, field) : "";
+  mapping.canFill = Boolean(field && mapping.value);
+  mapping.canAutoSelect = false;
+  mapping.manual = Boolean(field) && (!fromSaved || field !== mapping.autoField);
+  mapping.confidence = field ? (field === mapping.autoField ? mapping.autoConfidence : "手动") : "未匹配";
+}
+
+async function loadOverrides(host) {
+  const key = overrideStorageKey(host);
+  return new Promise((resolve) => {
+    chrome.storage.local.get([key], (data) => resolve(data[key] || {}));
+  });
+}
+
+async function saveOverride(mapping) {
+  const host = currentHost || await activeHost();
+  const key = overrideStorageKey(host);
+  const overrides = await loadOverrides(host);
+  overrides[mapping.signature] = mapping.field || "";
+  chrome.storage.local.set({ [key]: overrides });
+}
+
+function overrideStorageKey(host) {
+  return `offerosFieldOverrides:${host || "local"}`;
+}
+
+function profileValue(profile, field) {
+  if (!field) return "";
+  if (profile[field]) return profile[field];
+  const value = field.split(".").reduce((current, key) => {
+    if (current == null) return undefined;
+    return current[key];
+  }, profile);
+  if (Array.isArray(value)) return value.map(formatValue).filter(Boolean).join("\n");
+  return formatValue(value);
+}
+
+function formatValue(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+  if (Array.isArray(value)) return value.map(formatValue).filter(Boolean).join("\n");
+  if (typeof value === "object") return Object.values(value).map(formatValue).filter(Boolean).join(" ");
+  return "";
 }
 
 function previewValue(value) {

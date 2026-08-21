@@ -101,7 +101,8 @@ p {
 }
 
 input,
-textarea {
+textarea,
+select {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -111,7 +112,8 @@ textarea {
 }
 
 input:focus,
-textarea:focus {
+textarea:focus,
+select:focus {
   border-color: rgba(120, 243, 255, 0.55);
   outline: none;
 }
@@ -175,6 +177,11 @@ button:hover {
   background: rgba(126, 245, 209, 0.06);
 }
 
+.mapping-row.manual {
+  border-color: rgba(120, 243, 255, 0.28);
+  background: rgba(120, 243, 255, 0.055);
+}
+
 .mapping-row.disabled {
   opacity: 0.62;
 }
@@ -201,6 +208,12 @@ button:hover {
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mapping-main select {
+  margin-top: 6px;
+  padding: 7px 8px;
+  font-size: 12px;
 }
 
 .mapping-main small {

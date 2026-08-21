@@ -3122,9 +3122,10 @@ const App = {
       ["最高学历", "education.0.degree", "select + label: 学历"],
       ["学校名称", "education.0.schoolName", "label: 学校"],
       ["院系/专业", "education.0.college / education.0.major", "label: 院系、专业"],
-      ["实习经历", "internships", "textarea + label: 实习"],
-      ["项目经历", "projects", "textarea + label: 项目"],
-      ["作品链接", "portfolios", "label: 作品 / 主页"],
+      ["实习经历", "internships.0.* / internships", "公司、职位、起止时间、描述"],
+      ["项目经历", "projects.0.* / projects", "项目名、角色、起止时间、链接、描述"],
+      ["获奖信息", "awards.0.* / awards", "获奖类型、时间、奖项说明"],
+      ["作品主页", "portfolios.0.* / portfolios", "作品名、链接、提取码"],
     ];
     return `
       <section class="section-title">
