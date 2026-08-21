@@ -172,11 +172,11 @@ const App = {
   async reloadJobs() {
     try {
       if (await this.loadJobs(true)) {
-        this.render();
+        if (!this.composingQuery) this.render();
       }
     } catch (error) {
       this.setError(`岗位加载失败：${error.message}`);
-      this.render();
+      if (!this.composingQuery) this.render();
     }
   },
 
@@ -1682,7 +1682,7 @@ const App = {
       </section>
       <section class="panel" id="jobs-panel">
         <div class="toolbar">
-          <input id="job-search" value="${this.escape(this.state.query)}" placeholder="搜索公司、岗位、城市、能力、企业类型" oncompositionstart="App.startQueryComposition()" oncompositionend="App.endQueryComposition(this.value)" oninput="App.setQuery(this.value)" />
+          <input id="job-search" value="${this.escape(this.state.query)}" placeholder="搜索公司、岗位、城市、能力、企业类型" oncompositionstart="App.startQueryComposition()" oncompositionend="App.endQueryComposition(this.value)" oninput="App.setQuery(this.value, event)" />
           <select onchange="App.setCity(this.value)">
             ${cities.map((item) => `<option value="${this.escape(item)}" ${this.state.city === item ? "selected" : ""}>${item === "all" ? "全部城市" : this.escape(item)}</option>`).join("")}
           </select>
@@ -1905,18 +1905,20 @@ const App = {
     this.render();
   },
 
-  setQuery(value) {
+  setQuery(value, event = null) {
     this.state.query = value;
     this.state.jobsPage = 1;
     this.state.selectedCompanyKey = "";
-    if (this.composingQuery) return;
+    this.jobRequestId += 1;
     if (this.jobSearchTimer) clearTimeout(this.jobSearchTimer);
-    this.jobSearchTimer = setTimeout(() => this.reloadJobs(), 480);
+    if (this.composingQuery || event?.isComposing) return;
+    this.jobSearchTimer = setTimeout(() => this.reloadJobs(), 520);
   },
 
   startQueryComposition() {
     this.composingQuery = true;
     if (this.jobSearchTimer) clearTimeout(this.jobSearchTimer);
+    this.jobRequestId += 1;
   },
 
   endQueryComposition(value) {
