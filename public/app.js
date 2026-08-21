@@ -29,6 +29,8 @@ const App = {
     pendingParse: null,
     parseProgress: null,
     manualJobModalOpen: false,
+    applicationTitleModal: null,
+    assessmentDeadlineModal: null,
     adminSubmissionDetailId: null,
     interview: null,
     recording: false,
@@ -362,6 +364,8 @@ const App = {
       ${this.renderToast()}
       ${this.renderParseModal()}
       ${this.renderManualJobModal()}
+      ${this.renderApplicationTitleModal()}
+      ${this.renderAssessmentDeadlineModal()}
       ${this.renderJobSubmissionDetailModal()}
       ${this.renderLegalModal()}
     `;
@@ -1392,6 +1396,118 @@ const App = {
     `;
   },
 
+  renderApplicationTitleModal() {
+    const modal = this.state.applicationTitleModal;
+    if (!modal) return "";
+    const suggestions = ["产品经理", "后端开发", "前端开发", "算法工程师", "数据分析", "运营", "市场", "财务", "秘书"];
+    return `
+      <div class="modal-backdrop" role="dialog" aria-modal="true">
+        <section class="parse-modal application-edit-modal">
+          <div class="modal-head">
+            <span class="modal-indicator ok"></span>
+            <div>
+              <h3>岗位名称</h3>
+              <p>${this.escape(modal.company || "")}</p>
+            </div>
+          </div>
+          <div class="application-edit-body">
+            <label class="modal-field">
+              <span>你投递的具体岗位</span>
+              <input id="application-title-input" value="${this.escape(modal.value || "")}" placeholder="例如 产品经理、后端开发、秘书" autocomplete="off" />
+            </label>
+            <div class="choice-chips">
+              ${suggestions.map((item) => `<button class="chip-button" onclick="App.fillApplicationTitle('${this.escape(item)}')">${this.escape(item)}</button>`).join("")}
+            </div>
+          </div>
+          <div class="toolbar modal-actions">
+            <button class="btn primary" onclick="App.saveApplicationTitleModal()">保存</button>
+            <button class="btn" onclick="App.clearApplicationTitleModal()">清除</button>
+            <button class="btn ghost" onclick="App.closeApplicationTitleModal()">取消</button>
+          </div>
+        </section>
+      </div>
+    `;
+  },
+
+  renderAssessmentDeadlineModal() {
+    const modal = this.state.assessmentDeadlineModal;
+    if (!modal) return "";
+    return `
+      <div class="modal-backdrop" role="dialog" aria-modal="true">
+        <section class="parse-modal application-edit-modal deadline-modal">
+          <div class="modal-head">
+            <span class="modal-indicator ok"></span>
+            <div>
+              <h3>测评/笔试截止时间</h3>
+              <p>${this.escape(modal.company || "")}${modal.title ? ` · ${this.escape(modal.title)}` : ""}</p>
+            </div>
+          </div>
+          ${this.renderDeadlineCalendar(modal)}
+          <div class="deadline-time-row">
+            <label>
+              <span>小时</span>
+              <select id="assessment-hour" onchange="App.updateAssessmentDeadlineTime('hour', this.value)">
+                ${Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0")).map((hour) => `<option value="${hour}" ${hour === modal.hour ? "selected" : ""}>${hour}</option>`).join("")}
+              </select>
+            </label>
+            <label>
+              <span>分钟</span>
+              <select id="assessment-minute" onchange="App.updateAssessmentDeadlineTime('minute', this.value)">
+                ${this.minuteOptions().map((minute) => `<option value="${minute}" ${minute === modal.minute ? "selected" : ""}>${minute}</option>`).join("")}
+              </select>
+            </label>
+            <div class="deadline-preview">
+              <span>已选</span>
+              <strong id="assessment-deadline-preview">${modal.date ? `${this.dateLabel(modal.date)} ${modal.hour}:${modal.minute}` : "请选择日期"}</strong>
+            </div>
+          </div>
+          <div class="toolbar modal-actions">
+            <button class="btn primary" onclick="App.saveAssessmentDeadlineModal()">保存</button>
+            <button class="btn" onclick="App.clearAssessmentDeadlineModal()">清除提醒</button>
+            <button class="btn ghost" onclick="App.closeAssessmentDeadlineModal()">取消</button>
+          </div>
+        </section>
+      </div>
+    `;
+  },
+
+  renderDeadlineCalendar(modal) {
+    const monthStart = this.parseDateValue(`${modal.month}-01`) || new Date();
+    const year = monthStart.getFullYear();
+    const month = monthStart.getMonth();
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const todayValue = this.formatDateValue(new Date());
+    const cells = [];
+    for (let index = 0; index < firstDay; index += 1) {
+      cells.push(`<span class="calendar-empty"></span>`);
+    }
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      const value = this.formatDateValue(new Date(year, month, day));
+      const active = value === modal.date;
+      const today = value === todayValue;
+      const disabled = value < todayValue;
+      cells.push(`
+        <button class="calendar-day ${active ? "active" : ""} ${today ? "today" : ""}" ${disabled ? "disabled" : `onclick="App.selectAssessmentDeadlineDate('${value}')"`}>
+          ${day}
+        </button>
+      `);
+    }
+    return `
+      <div class="calendar-picker">
+        <div class="calendar-head">
+          <button class="btn small" onclick="App.shiftAssessmentDeadlineMonth(-1)">上月</button>
+          <strong>${this.escape(this.monthLabel(modal.month))}</strong>
+          <button class="btn small" onclick="App.shiftAssessmentDeadlineMonth(1)">下月</button>
+        </div>
+        <div class="calendar-weekdays">
+          ${["日", "一", "二", "三", "四", "五", "六"].map((item) => `<span>${item}</span>`).join("")}
+        </div>
+        <div class="calendar-days">${cells.join("")}</div>
+      </div>
+    `;
+  },
+
   openManualJobModal() {
     this.state.manualJobModalOpen = true;
     this.render();
@@ -2190,6 +2306,47 @@ const App = {
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   },
 
+  formatDateValue(date) {
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  },
+
+  parseDateValue(value) {
+    const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    if (Number.isNaN(date.getTime())) return null;
+    return date;
+  },
+
+  formatMonthValue(date) {
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
+  },
+
+  shiftMonthValue(value, delta) {
+    const [year, month] = String(value || this.formatMonthValue(new Date())).split("-").map(Number);
+    const date = new Date(year || new Date().getFullYear(), (month || new Date().getMonth() + 1) - 1 + delta, 1);
+    return this.formatMonthValue(date);
+  },
+
+  monthLabel(value) {
+    const [year, month] = String(value || "").split("-").map(Number);
+    if (!year || !month) return "";
+    return `${year}年${month}月`;
+  },
+
+  dateLabel(value) {
+    const date = this.parseDateValue(value);
+    if (!date) return "";
+    const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+    return `${date.getMonth() + 1}月${date.getDate()}日 ${weekdays[date.getDay()]}`;
+  },
+
+  minuteOptions() {
+    return Array.from({ length: 12 }, (_, index) => String(index * 5).padStart(2, "0"));
+  },
+
   applicationCard(item, statuses) {
     const actionLabels = {
       saved: "去投递",
@@ -2245,30 +2402,128 @@ const App = {
     await this.patchApplication(id, { status });
   },
 
-  async setApplicationTitle(id) {
+  setApplicationTitle(id) {
     const item = this.state.applications.find((entry) => entry.id === id);
-    const current = this.applicationPositionTitle(item || {});
-    const value = window.prompt("填写这个投递记录的岗位名称，例如：产品经理、后端开发、秘书。留空可清除。", current);
-    if (value === null) return;
+    if (!item) return;
+    this.state.applicationTitleModal = {
+      id,
+      company: item.job?.company || "",
+      value: this.applicationPositionTitle(item || {}),
+    };
+    this.render();
+  },
+
+  fillApplicationTitle(value) {
+    const input = document.querySelector("#application-title-input");
+    if (input) input.value = value;
+  },
+
+  closeApplicationTitleModal() {
+    this.state.applicationTitleModal = null;
+    this.render();
+  },
+
+  async saveApplicationTitleModal() {
+    const modal = this.state.applicationTitleModal;
+    if (!modal) return;
+    const value = document.querySelector("#application-title-input")?.value || "";
     try {
-      await this.patchApplication(id, { customTitle: value }, value.trim() ? "岗位名称已更新。" : "岗位名称已清除。");
+      this.state.applicationTitleModal = null;
+      await this.patchApplication(modal.id, { customTitle: value }, value.trim() ? "岗位名称已更新。" : "岗位名称已清除。");
     } catch (error) {
       this.setError(`更新岗位名称失败：${error.message}`);
       this.render();
     }
   },
 
-  async setAssessmentDeadline(id) {
-    const item = this.state.applications.find((entry) => entry.id === id);
-    const current = this.formatTimestampInput(item?.assessmentDeadlineAt);
-    const value = window.prompt("设置测评/笔试截止时间，格式：2026-08-21 18:00。留空可清除提醒。", current);
-    if (value === null) return;
+  async clearApplicationTitleModal() {
+    const modal = this.state.applicationTitleModal;
+    if (!modal) return;
     try {
+      this.state.applicationTitleModal = null;
+      await this.patchApplication(modal.id, { customTitle: "" }, "岗位名称已清除。");
+    } catch (error) {
+      this.setError(`更新岗位名称失败：${error.message}`);
+      this.render();
+    }
+  },
+
+  setAssessmentDeadline(id) {
+    const item = this.state.applications.find((entry) => entry.id === id);
+    if (!item) return;
+    const currentText = this.formatTimestampInput(item.assessmentDeadlineAt);
+    const currentDate = currentText ? currentText.slice(0, 10) : this.formatDateValue(new Date());
+    const currentTime = currentText ? currentText.slice(11).split(":") : ["18", "00"];
+    this.state.assessmentDeadlineModal = {
+      id,
+      company: item.job?.company || "",
+      title: this.applicationPositionTitle(item),
+      date: currentDate,
+      month: this.formatMonthValue(this.parseDateValue(currentDate) || new Date()),
+      hour: currentTime[0] || "18",
+      minute: this.minuteOptions().includes(currentTime[1]) ? currentTime[1] : "00",
+    };
+    this.render();
+  },
+
+  closeAssessmentDeadlineModal() {
+    this.state.assessmentDeadlineModal = null;
+    this.render();
+  },
+
+  shiftAssessmentDeadlineMonth(delta) {
+    if (!this.state.assessmentDeadlineModal) return;
+    this.state.assessmentDeadlineModal.month = this.shiftMonthValue(this.state.assessmentDeadlineModal.month, delta);
+    this.render();
+  },
+
+  selectAssessmentDeadlineDate(value) {
+    if (!this.state.assessmentDeadlineModal) return;
+    this.state.assessmentDeadlineModal.date = value;
+    this.state.assessmentDeadlineModal.month = this.formatMonthValue(this.parseDateValue(value) || new Date());
+    this.render();
+  },
+
+  updateAssessmentDeadlineTime(part, value) {
+    if (!this.state.assessmentDeadlineModal) return;
+    if (part === "hour") this.state.assessmentDeadlineModal.hour = value;
+    if (part === "minute") this.state.assessmentDeadlineModal.minute = value;
+    const modal = this.state.assessmentDeadlineModal;
+    const preview = document.querySelector("#assessment-deadline-preview");
+    if (preview) {
+      preview.textContent = modal.date ? `${this.dateLabel(modal.date)} ${modal.hour}:${modal.minute}` : "请选择日期";
+    }
+  },
+
+  async saveAssessmentDeadlineModal() {
+    const modal = this.state.assessmentDeadlineModal;
+    if (!modal?.date) {
+      this.setError("请选择测评/笔试截止日期。");
+      this.render();
+      return;
+    }
+    const hour = document.querySelector("#assessment-hour")?.value || modal.hour || "18";
+    const minute = document.querySelector("#assessment-minute")?.value || modal.minute || "00";
+    const value = `${modal.date} ${hour}:${minute}`;
+    try {
+      this.state.assessmentDeadlineModal = null;
       await this.patchApplication(
-        id,
-        { assessmentDeadlineAt: value.trim() },
-        value.trim() ? "测评/笔试截止时间已设置，截止前 3 小时会邮件提醒。" : "测评/笔试提醒已清除。",
+        modal.id,
+        { assessmentDeadlineAt: value },
+        "测评/笔试截止时间已设置，截止前 3 小时会邮件提醒。",
       );
+    } catch (error) {
+      this.setError(`设置截止时间失败：${error.message}`);
+      this.render();
+    }
+  },
+
+  async clearAssessmentDeadlineModal() {
+    const modal = this.state.assessmentDeadlineModal;
+    if (!modal) return;
+    try {
+      this.state.assessmentDeadlineModal = null;
+      await this.patchApplication(modal.id, { assessmentDeadlineAt: "" }, "测评/笔试提醒已清除。");
     } catch (error) {
       this.setError(`设置截止时间失败：${error.message}`);
       this.render();

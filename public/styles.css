@@ -1166,6 +1166,157 @@ select:focus {
   white-space: nowrap;
 }
 
+.application-edit-modal {
+  width: min(560px, 100%);
+}
+
+.application-edit-body {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.modal-field {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.modal-field input {
+  max-width: none;
+}
+
+.choice-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip-button {
+  border: 1px solid rgba(126, 245, 209, 0.34);
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: rgba(126, 245, 209, 0.08);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chip-button:hover,
+.chip-button:focus {
+  border-color: rgba(120, 243, 255, 0.5);
+  background: rgba(120, 243, 255, 0.14);
+  outline: none;
+}
+
+.deadline-modal {
+  width: min(600px, 100%);
+}
+
+.calendar-picker {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.calendar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.calendar-head strong {
+  font-size: 16px;
+}
+
+.calendar-weekdays,
+.calendar-days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.calendar-weekdays span {
+  color: var(--faint);
+  font-size: 12px;
+  text-align: center;
+}
+
+.calendar-empty,
+.calendar-day {
+  min-height: 38px;
+}
+
+.calendar-day {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0b0e14;
+  color: var(--text);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.calendar-day:hover,
+.calendar-day:focus {
+  border-color: rgba(120, 243, 255, 0.5);
+  background: rgba(120, 243, 255, 0.12);
+  outline: none;
+}
+
+.calendar-day.today {
+  color: var(--accent);
+}
+
+.calendar-day.active {
+  border-color: rgba(120, 243, 255, 0.75);
+  background: var(--accent);
+  color: #041114;
+}
+
+.calendar-day:disabled {
+  color: var(--faint);
+  background: rgba(255, 255, 255, 0.025);
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.deadline-time-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr minmax(160px, 1.5fr);
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.deadline-time-row label,
+.deadline-preview {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.deadline-time-row select {
+  max-width: none;
+}
+
+.deadline-preview {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.deadline-preview strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
 .interview-board {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 380px;
@@ -1531,5 +1682,19 @@ th {
   .section-title {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .deadline-time-row {
+    grid-template-columns: 1fr;
+  }
+
+  .calendar-weekdays,
+  .calendar-days {
+    gap: 4px;
+  }
+
+  .calendar-empty,
+  .calendar-day {
+    min-height: 34px;
   }
 }
