@@ -14,6 +14,8 @@ const FIELD_RULES = [
   { field: "profile.currentLocation", label: "当前所在地", sensitive: false, patterns: ["当前所处地", "当前所在地", "现居城市", "现居地", "所在地", "所在城市", "居住城市", "current city", "city"] },
   { field: "profile.wechat", label: "微信号", sensitive: false, patterns: ["微信号", "微信", "wechat", "weixin"] },
   { field: "profile.qq", label: "QQ号", sensitive: false, patterns: ["qq号", "qq"] },
+  { field: "profile.familyName", label: "姓", sensitive: false, patterns: ["姓", "姓氏", "last name", "family name", "surname"] },
+  { field: "profile.givenName", label: "名", sensitive: false, patterns: ["名", "名字", "first name", "given name"] },
   { field: "profile.name", label: "姓名", sensitive: false, patterns: ["真实姓名", "中文姓名", "中文名", "姓名", "full name", "name"] },
   { field: "education.0.startDate", label: "教育开始时间", sensitive: false, patterns: ["教育开始时间", "入学时间", "就读开始", "入校时间", "start date"] },
   { field: "education.0.endDate", label: "教育结束时间", sensitive: false, patterns: ["教育结束时间", "毕业时间", "就读结束", "毕业年月", "end date"] },
@@ -65,7 +67,7 @@ const LABEL_SELECTOR = [
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.3.1" });
+    sendResponse({ ok: true, version: "0.3.2" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -364,6 +366,8 @@ function guardBonus(field, normalizedAll, element, type) {
   const hasProject = /项目|project/.test(normalizedAll);
   const hasAward = /获奖|奖项|奖学金|竞赛|award/.test(normalizedAll);
   const hasPortfolio = /作品|主页|portfolio|website|链接|网址|提取码|密码/.test(normalizedAll);
+  const isSplitNameField = field === "profile.familyName" || field === "profile.givenName";
+  const hasSplitNameSignal = /(^姓$|^名$|姓氏|lastname|familyname|surname|firstname|givenname)/.test(normalizedAll);
   const isInternshipField = field.startsWith("internships.");
   const isProjectField = field.startsWith("projects.");
   const isAwardField = field.startsWith("awards.");
@@ -372,6 +376,9 @@ function guardBonus(field, normalizedAll, element, type) {
   if (field === "profile.phone" && (hasEmergency || hasVerifier || hasId)) bonus -= 90;
   if (field === "profile.phone" && hasContact && !hasEmergency) bonus -= 70;
   if (field === "profile.name" && (hasEmergency || hasVerifier || hasContact || hasCompany || /学校|项目|作品/.test(normalizedAll))) bonus -= 55;
+  if (field === "profile.name" && hasSplitNameSignal) bonus -= 90;
+  if (isSplitNameField && /姓名|真实姓名|中文姓名|中文名|fullname/.test(normalizedAll)) bonus -= 45;
+  if (isSplitNameField && /公司|企业|单位|学校|院校|项目|作品|奖项|专业|职位|岗位|名称/.test(normalizedAll) && !hasSplitNameSignal) bonus -= 95;
   if (field === "profile.idNumber" && type === "text") bonus += 8;
   if (field === "profile.currentLocation" && /就读|学校|院校/.test(normalizedAll)) bonus -= 70;
   if (field === "education.0.studyLocation" && /就读|学校|院校/.test(normalizedAll)) bonus += 28;
@@ -453,6 +460,8 @@ function getElementValue(element) {
 }
 
 function getProfileValue(profile, field) {
+  const virtualValue = getVirtualProfileValue(profile, field);
+  if (virtualValue !== undefined) return virtualValue;
   if (profile[field]) return profile[field];
   const value = field.split(".").reduce((current, key) => {
     if (current == null) return undefined;
@@ -462,6 +471,32 @@ function getProfileValue(profile, field) {
     return value.map(formatNestedValue).filter(Boolean).join("\n");
   }
   return formatNestedValue(value);
+}
+
+function getVirtualProfileValue(profile, field) {
+  if (field !== "profile.familyName" && field !== "profile.givenName") return undefined;
+  const fullName = String(profile["profile.name"] || profile.profile?.name || "").replace(/\s+/g, " ").trim();
+  if (!fullName) return "";
+  if (/\s/.test(fullName)) {
+    const parts = fullName.split(/\s+/).filter(Boolean);
+    if (field === "profile.familyName") return parts.length > 1 ? parts[parts.length - 1] : "";
+    return parts.length > 1 ? parts.slice(0, -1).join(" ") : parts[0];
+  }
+  const compact = fullName.replace(/\s+/g, "");
+  const compoundFamilyNames = [
+    "欧阳", "太史", "端木", "上官", "司马", "东方", "独孤", "南宫", "万俟", "闻人",
+    "夏侯", "诸葛", "尉迟", "公羊", "赫连", "澹台", "皇甫", "宗政", "濮阳", "公冶",
+    "太叔", "申屠", "公孙", "慕容", "仲孙", "钟离", "长孙", "宇文", "司徒", "鲜于",
+    "司空", "闾丘", "子车", "亓官", "司寇", "巫马", "公西", "颛孙", "壤驷", "公良",
+    "漆雕", "乐正", "宰父", "谷梁", "拓跋", "夹谷", "轩辕", "令狐", "段干", "百里",
+    "呼延", "东郭", "南门", "羊舌", "微生", "公户", "公玉", "公仪", "梁丘", "公仲",
+    "公上", "公门", "公山", "公坚", "左丘", "公伯", "西门", "公祖", "第五", "公乘",
+    "贯丘", "公皙", "南荣", "东里", "东宫", "仲长", "子书", "子桑", "即墨", "达奚",
+    "褚师"
+  ];
+  const familyName = compoundFamilyNames.find((name) => compact.startsWith(name)) || compact.slice(0, 1);
+  if (field === "profile.familyName") return familyName;
+  return compact.slice(familyName.length);
 }
 
 function formatNestedValue(value) {

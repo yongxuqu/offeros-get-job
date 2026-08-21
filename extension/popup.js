@@ -1,5 +1,7 @@
 const FIELD_OPTIONS = [
   ["profile.name", "姓名"],
+  ["profile.familyName", "姓"],
+  ["profile.givenName", "名"],
   ["profile.gender", "性别"],
   ["profile.countryRegion", "国家/地区"],
   ["profile.idType", "证件类型"],
@@ -352,6 +354,8 @@ function overrideStorageKey(host) {
 
 function profileValue(profile, field) {
   if (!field) return "";
+  const virtualValue = virtualProfileValue(profile, field);
+  if (virtualValue !== undefined) return virtualValue;
   if (profile[field]) return profile[field];
   const value = field.split(".").reduce((current, key) => {
     if (current == null) return undefined;
@@ -359,6 +363,32 @@ function profileValue(profile, field) {
   }, profile);
   if (Array.isArray(value)) return value.map(formatValue).filter(Boolean).join("\n");
   return formatValue(value);
+}
+
+function virtualProfileValue(profile, field) {
+  if (field !== "profile.familyName" && field !== "profile.givenName") return undefined;
+  const fullName = String(profile["profile.name"] || profile.profile?.name || "").replace(/\s+/g, " ").trim();
+  if (!fullName) return "";
+  if (/\s/.test(fullName)) {
+    const parts = fullName.split(/\s+/).filter(Boolean);
+    if (field === "profile.familyName") return parts.length > 1 ? parts[parts.length - 1] : "";
+    return parts.length > 1 ? parts.slice(0, -1).join(" ") : parts[0];
+  }
+  const compact = fullName.replace(/\s+/g, "");
+  const compoundFamilyNames = [
+    "欧阳", "太史", "端木", "上官", "司马", "东方", "独孤", "南宫", "万俟", "闻人",
+    "夏侯", "诸葛", "尉迟", "公羊", "赫连", "澹台", "皇甫", "宗政", "濮阳", "公冶",
+    "太叔", "申屠", "公孙", "慕容", "仲孙", "钟离", "长孙", "宇文", "司徒", "鲜于",
+    "司空", "闾丘", "子车", "亓官", "司寇", "巫马", "公西", "颛孙", "壤驷", "公良",
+    "漆雕", "乐正", "宰父", "谷梁", "拓跋", "夹谷", "轩辕", "令狐", "段干", "百里",
+    "呼延", "东郭", "南门", "羊舌", "微生", "公户", "公玉", "公仪", "梁丘", "公仲",
+    "公上", "公门", "公山", "公坚", "左丘", "公伯", "西门", "公祖", "第五", "公乘",
+    "贯丘", "公皙", "南荣", "东里", "东宫", "仲长", "子书", "子桑", "即墨", "达奚",
+    "褚师"
+  ];
+  const familyName = compoundFamilyNames.find((name) => compact.startsWith(name)) || compact.slice(0, 1);
+  if (field === "profile.familyName") return familyName;
+  return compact.slice(familyName.length);
 }
 
 function formatValue(value) {

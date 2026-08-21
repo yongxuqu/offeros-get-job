@@ -81,6 +81,8 @@ function input(id, label, attrs = {}, sectionTitle = "") {
 
 const cases = [
   input("realName", "姓名"),
+  input("familyName", "姓"),
+  input("givenName", "名"),
   input("school", "学校名称", {}, "教育经历"),
   input("company", "公司名称", {}, "实习经历"),
   input("position", "职位", {}, "实习经历"),
@@ -114,6 +116,8 @@ const byId = Object.fromEntries(mappings.map((mapping, index) => [fields[index].
 
 const expectations = {
   realName: "profile.name",
+  familyName: "profile.familyName",
+  givenName: "profile.givenName",
   school: "education.0.schoolName",
   company: "internships.0.company",
   position: "internships.0.position",
@@ -148,6 +152,8 @@ fillFields(profile, selectedMappings);
 
 const fillExpectations = {
   realName: "张同学",
+  familyName: "张",
+  givenName: "同学",
   school: "某某大学",
   company: "星云科技",
   position: "产品运营实习生",
