@@ -64,6 +64,10 @@ const LABEL_SELECTOR = [
 ].join(",");
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "OFFEROS_PING") {
+    sendResponse({ ok: true, version: "0.3.1" });
+    return true;
+  }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
     sendResponse({ mappings: buildMappings(message.profile || {}) });
     return true;

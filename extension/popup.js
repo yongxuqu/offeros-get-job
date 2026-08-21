@@ -209,7 +209,14 @@ function saveLocal(profile, message) {
 async function sendToTab(message) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error("没有找到当前标签页");
-  return chrome.tabs.sendMessage(tab.id, message);
+  if (!canRunOnPage(tab.url)) throw new Error("unsupported_page");
+  try {
+    return await chrome.tabs.sendMessage(tab.id, message);
+  } catch (error) {
+    if (!shouldInjectContentScript(error.message)) throw error;
+    await injectContentScript(tab.id);
+    return chrome.tabs.sendMessage(tab.id, message);
+  }
 }
 
 async function activeHost() {
@@ -219,6 +226,24 @@ async function activeHost() {
   } catch {
     return "local";
   }
+}
+
+function canRunOnPage(url) {
+  return /^(https?:|file:)/i.test(url || "");
+}
+
+function shouldInjectContentScript(message) {
+  return /Receiving end does not exist|Could not establish connection/i.test(message || "");
+}
+
+async function injectContentScript(tabId) {
+  if (!chrome.scripting?.executeScript) {
+    throw new Error("missing_scripting_permission");
+  }
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["content.js"]
+  });
 }
 
 function cleanServerBase() {
@@ -363,6 +388,11 @@ function showMessage(message, type = "info") {
 }
 
 function tabErrorLabel(message) {
+  if (message === "unsupported_page") return "当前页面不允许插件扫描，请打开招聘网站页面后再试";
+  if (message === "missing_scripting_permission") return "插件缺少脚本注入权限，请在扩展管理页刷新插件后重试";
+  if (/Cannot access contents|Cannot access a chrome|Extension manifest must request permission|The extensions gallery cannot be scripted/i.test(message)) {
+    return "当前页面不允许插件扫描，请打开招聘网站页面后再试";
+  }
   if (/Receiving end does not exist/i.test(message)) return "当前页面尚未加载插件脚本，请刷新页面后重试";
   return message || "操作失败";
 }
