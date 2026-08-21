@@ -55,6 +55,8 @@ const FIELD_META = Object.fromEntries(FIELD_RULES.map((rule) => [rule.field, rul
 const IGNORED_TYPES = new Set(["hidden", "password", "submit", "button", "file", "image", "reset"]);
 const FIELD_SELECTOR = "input, textarea, select, [contenteditable='true'], [role='textbox']";
 const CUSTOM_CONTROL_SELECTOR = [
+  ".el-select__wrapper",
+  ".el-input__wrapper",
   ".el-select",
   ".el-cascader",
   ".el-date-editor",
@@ -66,10 +68,17 @@ const CUSTOM_CONTROL_SELECTOR = [
 ].join(",");
 const CUSTOM_OPTION_SELECTOR = [
   ".el-select-dropdown__item:not(.is-disabled)",
+  ".el-select-dropdown li:not(.is-disabled)",
+  ".el-popper .el-select-dropdown__item:not(.is-disabled)",
+  ".el-popper li:not(.is-disabled)",
+  ".el-scrollbar__view li:not(.is-disabled)",
   ".el-cascader-node:not(.is-disabled)",
   ".ant-select-item-option:not(.ant-select-item-option-disabled)",
+  ".ant-select-dropdown .ant-select-item:not(.ant-select-item-option-disabled)",
   ".ant-cascader-menu-item:not(.ant-cascader-menu-item-disabled)",
-  "[role='option']:not([aria-disabled='true'])"
+  "[role='option']:not([aria-disabled='true'])",
+  "[class*='dropdown'] li",
+  "[class*='select'] [class*='option']"
 ].join(",");
 const FORM_ITEM_SELECTOR = ".ant-form-item, .ant-row, .el-form-item, .el-form-item--default, .form-item, .form-group, .field, .moka-form-item, .moka-form-row, .form-row, li, td";
 const LABEL_SELECTOR = [
@@ -85,7 +94,7 @@ const LABEL_SELECTOR = [
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.3.4" });
+    sendResponse({ ok: true, version: "0.3.6" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -112,9 +121,12 @@ function buildMappings(profile) {
 async function fillFields(profile, selectedMappings, selectedIndexes) {
   const selected = normalizeSelectedMappings(selectedMappings, selectedIndexes);
   const mappings = [];
-  const fields = getFields();
-  for (let index = 0; index < fields.length; index += 1) {
-    const element = fields[index];
+  const initialFields = getFields();
+  const maxSelectedIndex = Math.max(-1, ...selected.keys());
+  const fieldCount = Math.max(initialFields.length, maxSelectedIndex + 1);
+  for (let index = 0; index < fieldCount; index += 1) {
+    const element = getFields()[index];
+    if (!element) continue;
     let mapping = describeField(element, index, profile);
     const selectedField = selected.get(index);
     if (selectedField !== undefined) {
@@ -123,7 +135,8 @@ async function fillFields(profile, selectedMappings, selectedIndexes) {
     const shouldFill = selected.has(index) && mapping.field && mapping.value && mapping.canFill;
     if (shouldFill) {
       mapping.filled = await applyValue(element, mapping.value);
-      mapping.currentValue = getElementValue(element);
+      await wait(160);
+      mapping.currentValue = getElementValue(getFields()[index] || element);
     }
     mappings.push(mapping);
   }
@@ -535,15 +548,23 @@ async function applyValue(element, value) {
 
 async function fillCustomControl(element, value) {
   const formattedValue = normalizeValueForElement(element, value);
-  const control = element.closest(CUSTOM_CONTROL_SELECTOR) || element;
-  clickElement(control);
-  if (control !== element) clickElement(element);
-  await wait(180);
+  const rootDocument = element.ownerDocument || document;
 
-  const option = findBestCustomOption(formattedValue, element.ownerDocument || document) || findBestCustomOption(value, element.ownerDocument || document);
+  await openCustomControl(element, [formattedValue, value], rootDocument);
+  let option = await waitForCustomOption([formattedValue, value], rootDocument, 1800);
+  if (!option) {
+    setNativeValue(element, formattedValue);
+    dispatchInputEvents(element);
+    dispatchKeyboardEvents(element, "ArrowDown");
+    await wait(120);
+    option = await waitForCustomOption([formattedValue, value], rootDocument, 1200);
+  }
   if (option) {
-    clickElement(option);
-    await wait(160);
+    const frameworkSelected = await selectFrameworkOption(element, option, formattedValue);
+    if (!frameworkSelected) clickCustomOption(option);
+    dispatchKeyboardEvents(element, "Enter");
+    await wait(240);
+    forceCustomInputValue(element, formattedValue);
     dispatchInputEvents(element);
     return true;
   }
@@ -558,22 +579,202 @@ async function fillCustomControl(element, value) {
   return false;
 }
 
+async function openCustomControl(element, values, rootDocument) {
+  const targets = uniqueElements([
+    element,
+    element.closest?.(".el-select__wrapper, .el-input__wrapper, .ant-select-selector, .ant-picker"),
+    element.closest?.(CUSTOM_CONTROL_SELECTOR),
+    element.parentElement,
+    element.closest?.(".el-form-item, .ant-form-item, .moka-form-item")
+  ]);
+  for (const target of targets) {
+    clickElement(target);
+    await wait(120);
+    if (values.some((value) => findBestCustomOption(value, rootDocument))) return;
+  }
+}
+
+function uniqueElements(items) {
+  return items.filter((element, index, list) => element && list.indexOf(element) === index);
+}
+
 function clickElement(element) {
   if (!element) return;
   element.scrollIntoView?.({ block: "center", inline: "center" });
   element.focus?.();
-  ["pointerdown", "mousedown", "mouseup"].forEach((type) => {
-    element.dispatchEvent?.(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
-  });
+  ["pointerover", "mouseover", "mousemove", "pointerdown", "mousedown", "pointerup", "mouseup"].forEach((type) => dispatchMouseLikeEvent(element, type));
   if (typeof element.click === "function") {
     element.click();
   } else {
-    element.dispatchEvent?.(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    dispatchMouseLikeEvent(element, "click");
   }
+}
+
+function clickCustomOption(option) {
+  const target = option.querySelector?.("span, div, [class*='label'], [class*='text']") || option;
+  clickElement(target);
+  if (target !== option) clickElement(option);
+}
+
+async function selectFrameworkOption(element, option, value) {
+  if (trySelectFrameworkOption(element, option)) return true;
+  return runPageWorldSelect(element, option, value);
+}
+
+function trySelectFrameworkOption(element, option) {
+  const optionVm = findVueInstance(option);
+  const controlVm = findVueInstance(element.closest?.(".el-select, .el-cascader, .ant-select") || element);
+  try {
+    if (optionVm && typeof optionVm.selectOptionClick === "function") {
+      optionVm.selectOptionClick();
+      return true;
+    }
+    if (controlVm && optionVm && typeof controlVm.handleOptionSelect === "function") {
+      controlVm.handleOptionSelect(optionVm, true);
+      return true;
+    }
+    if (controlVm && optionVm && typeof controlVm.$emit === "function" && optionVm.value !== undefined) {
+      controlVm.$emit("input", optionVm.value);
+      controlVm.$emit("change", optionVm.value);
+      if ("visible" in controlVm) controlVm.visible = false;
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function findVueInstance(element) {
+  for (let current = element; current; current = current.parentElement) {
+    if (current.__vue__) return current.__vue__;
+    if (current.__vueParentComponent) return current.__vueParentComponent.ctx || current.__vueParentComponent.proxy;
+  }
+  return null;
+}
+
+function runPageWorldSelect(element, option, value) {
+  const doc = element.ownerDocument || document;
+  const host = doc.documentElement || doc.body || doc.head;
+  if (!host || !doc.createElement || !window.addEventListener || typeof CustomEvent !== "function") return Promise.resolve(false);
+
+  const marker = `offeros-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  element.setAttribute("data-offeros-control-id", marker);
+  option.setAttribute("data-offeros-option-id", marker);
+
+  return new Promise((resolve) => {
+    const eventName = `${marker}:selected`;
+    const cleanup = () => {
+      window.removeEventListener(eventName, onResult);
+      element.removeAttribute("data-offeros-control-id");
+      option.removeAttribute("data-offeros-option-id");
+    };
+    const timer = window.setTimeout(() => {
+      cleanup();
+      resolve(false);
+    }, 700);
+    const onResult = (event) => {
+      window.clearTimeout(timer);
+      cleanup();
+      resolve(Boolean(event.detail?.ok));
+    };
+    window.addEventListener(eventName, onResult, { once: true });
+
+    const script = doc.createElement("script");
+    script.textContent = `(() => {
+      const control = document.querySelector(${JSON.stringify(`[data-offeros-control-id="${marker}"]`)});
+      const option = document.querySelector(${JSON.stringify(`[data-offeros-option-id="${marker}"]`)});
+      let ok = false;
+      const findVm = (node) => {
+        for (let current = node; current; current = current.parentElement) {
+          if (current.__vue__) return current.__vue__;
+          if (current.__vueParentComponent) return current.__vueParentComponent.ctx || current.__vueParentComponent.proxy;
+        }
+        return null;
+      };
+      try {
+        const optionVm = findVm(option);
+        const controlVm = findVm(control && (control.closest(".el-select, .el-cascader, .ant-select") || control));
+        if (optionVm && typeof optionVm.selectOptionClick === "function") {
+          optionVm.selectOptionClick();
+          ok = true;
+        } else if (controlVm && optionVm && typeof controlVm.handleOptionSelect === "function") {
+          controlVm.handleOptionSelect(optionVm, true);
+          ok = true;
+        } else if (controlVm && optionVm && typeof controlVm.$emit === "function" && optionVm.value !== undefined) {
+          controlVm.$emit("input", optionVm.value);
+          controlVm.$emit("change", optionVm.value);
+          if ("visible" in controlVm) controlVm.visible = false;
+          ok = true;
+        }
+      } catch (error) {
+        ok = false;
+      }
+      window.dispatchEvent(new CustomEvent(${JSON.stringify(eventName)}, { detail: { ok } }));
+      document.currentScript && document.currentScript.remove();
+    })();`;
+    host.appendChild(script);
+  });
+}
+
+function forceCustomInputValue(element, value) {
+  const normalizedValue = normalize(value);
+  if (!normalizedValue) return;
+  const currentValue = normalize(getElementValue(element));
+  if (!currentValue || !textMatchesValue(currentValue, normalizedValue)) {
+    setNativeValue(element, value);
+  }
+  const placeholder = element.getAttribute?.("placeholder") || "";
+  if (textMatchesValue(normalize(placeholder), normalizedValue)) {
+    element.setAttribute("placeholder", placeholderTextForElement(element));
+  }
+}
+
+function placeholderTextForElement(element) {
+  const label = componentLabel(element) || labelForId(element) || "";
+  if (/学历/.test(label)) return "请选择学历";
+  if (/年级排名|成绩排名/.test(label)) return "请选择年级排名";
+  if (/培养方式/.test(label)) return "请选择培养方式";
+  return "请选择";
+}
+
+function dispatchMouseLikeEvent(element, type) {
+  const rect = element.getBoundingClientRect?.();
+  const clientX = rect ? rect.left + rect.width / 2 : 0;
+  const clientY = rect ? rect.top + rect.height / 2 : 0;
+  const EventConstructor = type.startsWith("pointer") && typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
+  element.dispatchEvent?.(new EventConstructor(type, {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    view: window,
+    clientX,
+    clientY,
+    screenX: clientX,
+    screenY: clientY,
+    button: 0,
+    buttons: type.includes("down") ? 1 : 0,
+    pointerId: 1,
+    pointerType: "mouse",
+    isPrimary: true
+  }));
+}
+
+async function waitForCustomOption(values, rootDocument, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    for (const value of values) {
+      const option = findBestCustomOption(value, rootDocument);
+      if (option) return option;
+    }
+    await wait(120);
+  }
+  return null;
 }
 
 function findBestCustomOption(value, rootDocument = document) {
   const normalizedValue = normalize(value);
+  if (!normalizedValue) return null;
   const docs = rootDocument === document ? [document] : [rootDocument, document];
   const options = docs.flatMap((doc) => [...doc.querySelectorAll(CUSTOM_OPTION_SELECTOR)])
     .filter(isVisibleElement)
@@ -581,9 +782,16 @@ function findBestCustomOption(value, rootDocument = document) {
     .filter((item) => item.normalized);
   const matched = (
     options.find((item) => item.normalized === normalizedValue) ||
-    options.find((item) => item.normalized.includes(normalizedValue) || normalizedValue.includes(item.normalized))
+    options.find((item) => textMatchesValue(item.normalized, normalizedValue))
   );
   return matched?.element || null;
+}
+
+function textMatchesValue(optionText, valueText) {
+  if (!optionText || !valueText) return false;
+  const compactOption = optionText.replace(/\s+/g, "");
+  const compactValue = valueText.replace(/\s+/g, "");
+  return compactOption.includes(compactValue) || compactValue.includes(compactOption);
 }
 
 function customOptionText(element) {
@@ -634,9 +842,17 @@ function setNativeValue(element, value) {
 }
 
 function dispatchInputEvents(element) {
+  element.dispatchEvent(new Event("beforeinput", { bubbles: true }));
   element.dispatchEvent(new Event("input", { bubbles: true }));
   element.dispatchEvent(new Event("change", { bubbles: true }));
   element.dispatchEvent(new Event("blur", { bubbles: true }));
+}
+
+function dispatchKeyboardEvents(element, key) {
+  if (typeof KeyboardEvent !== "function") return;
+  ["keydown", "keyup"].forEach((type) => {
+    element.dispatchEvent(new KeyboardEvent(type, { key, bubbles: true, cancelable: true }));
+  });
 }
 
 function getElementValue(element) {
