@@ -3710,6 +3710,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         body = self.read_json()
         job_id = body.get("jobId")
+        submitted_title = clean_text(body.get("jobTitle"))[:80]
         answers = body.get("answers") or []
         if not answers:
             self.send_json(400, {"error": "answers_required"})
@@ -3717,8 +3718,22 @@ class AppHandler(BaseHTTPRequestHandler):
         job = None
         with connect_db() as conn:
             if job_id:
-                row = conn.execute("SELECT * FROM jobs WHERE id = ?", (int(job_id),)).fetchone()
-                job = row_to_job(row) if row else None
+                row = conn.execute(
+                    """
+                    SELECT jobs.*, applications.custom_title AS application_custom_title
+                    FROM jobs
+                    LEFT JOIN applications ON applications.job_id = jobs.id AND applications.user_id = ?
+                    WHERE jobs.id = ?
+                    """,
+                    (user["id"], int(job_id)),
+                ).fetchone()
+                if row:
+                    role_title = clean_text(row["application_custom_title"] or submitted_title)[:80]
+                    if not role_title:
+                        self.send_json(400, {"error": "job_title_required"})
+                        return
+                    job = row_to_job(row)
+                    job["title"] = role_title
             fallback = local_interview_report(job, answers)
             report = external_ai_report(job, answers, fallback)
             cursor = conn.execute(

@@ -2725,12 +2725,13 @@ const App = {
   },
 
   interviewQuestions(job) {
-    const req = job?.requirements || ["岗位要求"];
+    const title = job?.title || "这个岗位";
+    const req = job?.requirements?.length ? job.requirements : [title, "岗位核心能力"];
     return [
-      `请你用 1 分钟介绍自己，并说明为什么适合${job ? job.title : "这个岗位"}。`,
-      `结合一段项目或实习经历，说明你如何体现「${req[0]}」能力。`,
-      `如果面试官追问你的项目结果，你会如何量化自己的贡献？`,
-      `这个岗位还要求「${req[1] || req[0]}」，你认为自己最需要补强的地方是什么？`,
+      `请你用 1 分钟介绍自己，并说明为什么适合${title}。`,
+      `结合一段项目或实习经历，说明你如何体现${title}需要的「${req[0]}」能力。`,
+      `如果面试官围绕${title}追问你的项目结果，你会如何量化自己的贡献？`,
+      `从${title}的工作内容看，你认为自己最需要补强的地方是什么？`,
     ];
   },
 
@@ -2738,13 +2739,23 @@ const App = {
     return this.state.applications.filter((item) => item.status === "interview" && item.job);
   },
 
+  interviewReadyApplications() {
+    return this.interviewApplications().filter((item) => String(item.customTitle || "").trim());
+  },
+
+  interviewPendingTitleApplications() {
+    return this.interviewApplications().filter((item) => !String(item.customTitle || "").trim());
+  },
+
   interviewJobFromApplication(jobId) {
-    const application = this.interviewApplications().find((item) => Number(item.jobId) === Number(jobId));
+    const application = this.interviewReadyApplications().find((item) => Number(item.jobId) === Number(jobId));
     if (!application) return null;
+    const customTitle = String(application.customTitle || "").trim();
+    if (!customTitle) return null;
     return {
       ...application.job,
       id: application.jobId,
-      title: this.applicationPositionTitle(application) || application.job.title,
+      title: customTitle,
       requirements: application.job.requirements || [],
     };
   },
@@ -2752,13 +2763,14 @@ const App = {
   startInterview(jobId) {
     const job = this.interviewJobFromApplication(jobId);
     if (!job) {
-      this.setError("请先把岗位拖到投递看板的面试列，再开始模拟面试。");
+      this.setError("请先把岗位拖到投递看板的面试列，并填写具体岗位名称。");
       this.render();
       return;
     }
     this.state.view = "interview";
     this.state.interview = {
       jobId: job?.id || null,
+      jobTitle: job?.title || "",
       index: 0,
       answers: [],
       questions: this.interviewQuestions(job),
@@ -2768,11 +2780,12 @@ const App = {
   },
 
   renderInterview() {
-    const interviewApplications = this.interviewApplications();
-    const selectedJobId = this.state.interview?.jobId || interviewApplications[0]?.jobId || null;
+    const readyApplications = this.interviewReadyApplications();
+    const pendingTitleApplications = this.interviewPendingTitleApplications();
+    const selectedJobId = this.state.interview?.jobId || readyApplications[0]?.jobId || null;
     const job = this.interviewJobFromApplication(selectedJobId);
     const interview = this.state.interview;
-    const canStart = Boolean(interviewApplications.length && selectedJobId);
+    const canStart = Boolean(readyApplications.length && selectedJobId);
     return `
       <section class="section-title">
         <div>
@@ -2783,14 +2796,15 @@ const App = {
         <div class="panel">
           <div class="toolbar">
             <select onchange="App.startInterview(Number(this.value))" ${canStart ? "" : "disabled"}>
-              ${interviewApplications.map((item) => {
-                const title = this.applicationPositionTitle(item) || item.job.title;
+              ${readyApplications.map((item) => {
+                const title = String(item.customTitle || "").trim();
                 return `<option value="${item.jobId}" ${Number(item.jobId) === Number(selectedJobId) ? "selected" : ""}>${this.escape(item.job.company)} · ${this.escape(title)}</option>`;
               }).join("")}
             </select>
             <button class="btn primary" ${canStart ? `onclick="App.startInterview(${selectedJobId})"` : "disabled"}>开始面试</button>
           </div>
-          ${interview ? this.renderInterviewSession(job, interview) : canStart ? `<div class="empty">选择岗位后开始。每题可语音回答，也可以直接输入文字。</div>` : `<div class="empty">把岗位拖到投递看板的“面试”列后，这里才会出现。</div>`}
+          ${pendingTitleApplications.length ? this.renderInterviewTitleReminder(pendingTitleApplications) : ""}
+          ${interview ? this.renderInterviewSession(job, interview) : canStart ? `<div class="empty">选择岗位后开始。每题可语音回答，也可以直接输入文字。</div>` : `<div class="empty">${this.interviewApplications().length ? "请先填写具体岗位名称，填写后这里才会出现可面试岗位。" : "把岗位拖到投递看板的“面试”列后，这里才会出现。"}</div>`}
         </div>
         <aside class="panel">
           <h2 style="margin-top: 0;">历史报告</h2>
@@ -2812,6 +2826,26 @@ const App = {
           </div>
         </aside>
       </section>
+    `;
+  },
+
+  renderInterviewTitleReminder(items) {
+    return `
+      <div class="review-warning-box warn">
+        <strong>先填写具体岗位</strong>
+        <p>面试题会按具体岗位生成，不再使用“招聘岗位合集”。</p>
+        <div class="list">
+          ${items.map((item) => `
+            <div class="list-item">
+              <strong>${this.escape(item.job.company)}</strong>
+              <div class="muted">${this.escape(item.job.city)} · ${this.escape(item.job.batch || "未标注批次")}</div>
+              <div class="toolbar" style="margin-top: 10px;">
+                <button class="btn small primary" onclick="App.setApplicationTitle(${item.id})">填写岗位</button>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      </div>
     `;
   },
 
@@ -2943,7 +2977,7 @@ const App = {
     }
     const data = await this.api("/api/interviews/report", {
       method: "POST",
-      body: JSON.stringify({ jobId: interview.jobId, answers: validAnswers }),
+      body: JSON.stringify({ jobId: interview.jobId, jobTitle: interview.jobTitle || "", answers: validAnswers }),
     });
     interview.report = data.report;
     interview.historyId = data.interviewId;
