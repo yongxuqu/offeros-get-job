@@ -1052,6 +1052,12 @@ select:focus {
   padding: 12px;
   box-shadow: none;
   background: rgba(255, 255, 255, 0.032);
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.kanban-column.drag-over {
+  border-color: rgba(120, 243, 255, 0.58);
+  background: rgba(120, 243, 255, 0.07);
 }
 
 .kanban-column h3 {
@@ -1068,6 +1074,18 @@ select:focus {
   background: #0c0f15;
   padding: 12px 38px 12px 12px;
   margin-bottom: 10px;
+  cursor: grab;
+  transition: opacity 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.application-card:active {
+  cursor: grabbing;
+}
+
+.application-card.dragging {
+  opacity: 0.56;
+  border-color: rgba(120, 243, 255, 0.5);
+  transform: scale(0.99);
 }
 
 .application-card strong {
@@ -1120,6 +1138,12 @@ select:focus {
   background: rgba(255, 122, 144, 0.08);
 }
 
+.review-badge.completed {
+  border-color: rgba(126, 245, 209, 0.36);
+  color: #d7fff3;
+  background: rgba(126, 245, 209, 0.08);
+}
+
 .role-suggestions {
   margin-top: 18px;
   border-top: 1px solid var(--line);
@@ -1156,7 +1180,8 @@ select:focus {
 }
 
 .application-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(82px, 1fr));
   gap: 8px;
   margin-top: 10px;
 }
@@ -1164,6 +1189,12 @@ select:focus {
 .application-action {
   width: 100%;
   white-space: nowrap;
+}
+
+.btn.success {
+  border-color: rgba(126, 245, 209, 0.42);
+  color: #d7fff3;
+  background: rgba(126, 245, 209, 0.08);
 }
 
 .application-edit-modal {

@@ -140,7 +140,6 @@ KEYWORD_MAP = {
 }
 
 STATUS_LABELS = {
-    "saved": "已收藏",
     "preparing": "准备投递",
     "applied": "已投递",
     "test": "测评/笔试",
@@ -353,6 +352,10 @@ def init_db() -> None:
                 custom_title TEXT NOT NULL DEFAULT '',
                 assessment_deadline_at INTEGER,
                 assessment_reminder_sent_at INTEGER,
+                interview_deadline_at INTEGER,
+                interview_reminder_sent_at INTEGER,
+                assessment_completed_at INTEGER,
+                interview_completed_at INTEGER,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 UNIQUE(user_id, job_id)
@@ -392,6 +395,15 @@ def init_db() -> None:
             conn.execute("ALTER TABLE applications ADD COLUMN assessment_deadline_at INTEGER")
         if "assessment_reminder_sent_at" not in application_columns:
             conn.execute("ALTER TABLE applications ADD COLUMN assessment_reminder_sent_at INTEGER")
+        if "interview_deadline_at" not in application_columns:
+            conn.execute("ALTER TABLE applications ADD COLUMN interview_deadline_at INTEGER")
+        if "interview_reminder_sent_at" not in application_columns:
+            conn.execute("ALTER TABLE applications ADD COLUMN interview_reminder_sent_at INTEGER")
+        if "assessment_completed_at" not in application_columns:
+            conn.execute("ALTER TABLE applications ADD COLUMN assessment_completed_at INTEGER")
+        if "interview_completed_at" not in application_columns:
+            conn.execute("ALTER TABLE applications ADD COLUMN interview_completed_at INTEGER")
+        conn.execute("UPDATE applications SET status = 'preparing' WHERE status = 'saved'")
         migrate_jobs_unique_constraint(conn)
         conn.execute("DELETE FROM jobs WHERE source_url LIKE 'https://careers.example.com/%'")
 
@@ -443,12 +455,13 @@ def send_email_code(email_addr: str, code: str) -> bool:
     )
 
 
-def send_assessment_reminder(email_addr: str, label: str, deadline_at: int) -> bool:
+def send_application_stage_reminder(email_addr: str, label: str, stage: str, deadline_at: int) -> bool:
     deadline_text = utc_string(deadline_at)
+    action = "面试" if stage == "面试" else "测评"
     return send_email_message(
         email_addr,
-        "OfferOS 测评/笔试提醒",
-        f"距离{label}测评/笔试的时间不足3小时，记得去测评。\n\n截止时间：{deadline_text}\n\nOfferOS",
+        f"OfferOS {stage}提醒",
+        f"距离{label}{stage}的时间不足3小时，记得去{action}。\n\n时间：{deadline_text}\n\nOfferOS",
     )
 
 
@@ -459,53 +472,59 @@ def application_reminder_label(row: sqlite3.Row) -> str:
     return f"{row['company']} · {title}" if title else row["company"]
 
 
-def check_assessment_reminders() -> None:
+def check_application_reminders() -> None:
     timestamp = now()
+    configs = [
+        ("test", "assessment_deadline_at", "assessment_reminder_sent_at", "测评/笔试"),
+        ("interview", "interview_deadline_at", "interview_reminder_sent_at", "面试"),
+    ]
     with connect_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT applications.id, applications.custom_title, applications.assessment_deadline_at,
-                   users.email, jobs.company, jobs.title
-            FROM applications
-            JOIN users ON users.id = applications.user_id
-            JOIN jobs ON jobs.id = applications.job_id
-            WHERE applications.status = 'test'
-              AND applications.assessment_deadline_at IS NOT NULL
-              AND applications.assessment_deadline_at > ?
-              AND applications.assessment_deadline_at <= ?
-              AND (applications.assessment_reminder_sent_at IS NULL OR applications.assessment_reminder_sent_at = 0)
-            LIMIT 50
-            """,
-            (timestamp, timestamp + 3 * 60 * 60),
-        ).fetchall()
-        for row in rows:
-            try:
-                sent = send_assessment_reminder(
-                    row["email"],
-                    application_reminder_label(row),
-                    int(row["assessment_deadline_at"]),
-                )
-            except Exception as exc:
-                print(f"[{utc_string()}] assessment_reminder_failed application={row['id']} error={type(exc).__name__}")
-                sent = False
-            if sent:
-                conn.execute(
-                    "UPDATE applications SET assessment_reminder_sent_at = ?, updated_at = ? WHERE id = ?",
-                    (timestamp, timestamp, row["id"]),
-                )
+        for status, deadline_column, reminder_column, stage in configs:
+            rows = conn.execute(
+                f"""
+                SELECT applications.id, applications.custom_title, applications.{deadline_column} AS deadline_at,
+                       users.email, jobs.company, jobs.title
+                FROM applications
+                JOIN users ON users.id = applications.user_id
+                JOIN jobs ON jobs.id = applications.job_id
+                WHERE applications.status = ?
+                  AND applications.{deadline_column} IS NOT NULL
+                  AND applications.{deadline_column} > ?
+                  AND applications.{deadline_column} <= ?
+                  AND (applications.{reminder_column} IS NULL OR applications.{reminder_column} = 0)
+                LIMIT 50
+                """,
+                (status, timestamp, timestamp + 3 * 60 * 60),
+            ).fetchall()
+            for row in rows:
+                try:
+                    sent = send_application_stage_reminder(
+                        row["email"],
+                        application_reminder_label(row),
+                        stage,
+                        int(row["deadline_at"]),
+                    )
+                except Exception as exc:
+                    print(f"[{utc_string()}] application_reminder_failed application={row['id']} stage={stage} error={type(exc).__name__}")
+                    sent = False
+                if sent:
+                    conn.execute(
+                        f"UPDATE applications SET {reminder_column} = ?, updated_at = ? WHERE id = ?",
+                        (timestamp, timestamp, row["id"]),
+                    )
 
 
-def run_assessment_reminder_loop() -> None:
+def run_application_reminder_loop() -> None:
     while True:
         try:
-            check_assessment_reminders()
+            check_application_reminders()
         except Exception as exc:
-            print(f"[{utc_string()}] assessment_reminder_loop_error error={type(exc).__name__}")
+            print(f"[{utc_string()}] application_reminder_loop_error error={type(exc).__name__}")
         time.sleep(60)
 
 
 def start_background_tasks() -> None:
-    threading.Thread(target=run_assessment_reminder_loop, name="assessment-reminders", daemon=True).start()
+    threading.Thread(target=run_application_reminder_loop, name="application-reminders", daemon=True).start()
 
 
 def job_source_update_date(description: str, fallback_ts=None) -> str:
@@ -3403,6 +3422,14 @@ class AppHandler(BaseHTTPRequestHandler):
                     "assessmentDeadline": utc_string(row["assessment_deadline_at"]) if row["assessment_deadline_at"] else "",
                     "assessmentReminderSentAt": row["assessment_reminder_sent_at"] or None,
                     "assessmentReminderSent": utc_string(row["assessment_reminder_sent_at"]) if row["assessment_reminder_sent_at"] else "",
+                    "interviewDeadlineAt": row["interview_deadline_at"] or None,
+                    "interviewDeadline": utc_string(row["interview_deadline_at"]) if row["interview_deadline_at"] else "",
+                    "interviewReminderSentAt": row["interview_reminder_sent_at"] or None,
+                    "interviewReminderSent": utc_string(row["interview_reminder_sent_at"]) if row["interview_reminder_sent_at"] else "",
+                    "assessmentCompletedAt": row["assessment_completed_at"] or None,
+                    "assessmentCompleted": utc_string(row["assessment_completed_at"]) if row["assessment_completed_at"] else "",
+                    "interviewCompletedAt": row["interview_completed_at"] or None,
+                    "interviewCompleted": utc_string(row["interview_completed_at"]) if row["interview_completed_at"] else "",
                     "updatedAt": utc_string(row["updated_at"]),
                     "job": {
                         "company": row["company"],
@@ -3427,7 +3454,9 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         body = self.read_json()
         job_id = int(body.get("jobId") or 0)
-        status = body.get("status") or "saved"
+        status = body.get("status") or "preparing"
+        if status == "saved":
+            status = "preparing"
         notes = body.get("notes") or ""
         if status not in STATUS_LABELS:
             self.send_json(400, {"error": "invalid_status"})
@@ -3470,9 +3499,11 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if not job["requirements"]:
             job["requirements"] = split_job_tokens(job["batch"], job["category"], job["title"], job["description"])[:10]
-        status = body.get("status") or "saved"
+        status = body.get("status") or "preparing"
+        if status == "saved":
+            status = "preparing"
         if status not in STATUS_LABELS:
-            status = "saved"
+            status = "preparing"
         timestamp = now()
         requirements = json.dumps(job["requirements"], ensure_ascii=False)
         payload = {
@@ -3588,13 +3619,27 @@ class AppHandler(BaseHTTPRequestHandler):
         status = body.get("status")
         notes = body.get("notes")
         custom_title = clean_text(body.get("customTitle"))[:80] if "customTitle" in body else None
-        deadline_provided = "assessmentDeadlineAt" in body or "assessmentDeadline" in body
+        if status == "saved":
+            status = "preparing"
+        assessment_deadline_provided = "assessmentDeadlineAt" in body or "assessmentDeadline" in body
+        interview_deadline_provided = "interviewDeadlineAt" in body or "interviewDeadline" in body
         assessment_deadline_at = None
-        if deadline_provided:
+        interview_deadline_at = None
+        if assessment_deadline_provided:
             assessment_deadline_at = parse_local_datetime(body.get("assessmentDeadlineAt", body.get("assessmentDeadline")))
             if assessment_deadline_at is None and body.get("assessmentDeadlineAt", body.get("assessmentDeadline")) not in (None, ""):
                 self.send_json(400, {"error": "invalid_deadline"})
                 return
+        if interview_deadline_provided:
+            interview_deadline_at = parse_local_datetime(body.get("interviewDeadlineAt", body.get("interviewDeadline")))
+            if interview_deadline_at is None and body.get("interviewDeadlineAt", body.get("interviewDeadline")) not in (None, ""):
+                self.send_json(400, {"error": "invalid_deadline"})
+                return
+        assessment_completed_provided = "assessmentCompleted" in body or "assessmentCompletedAt" in body
+        interview_completed_provided = "interviewCompleted" in body or "interviewCompletedAt" in body
+        timestamp = now()
+        assessment_completed_at = timestamp if body.get("assessmentCompleted") or body.get("assessmentCompletedAt") else None
+        interview_completed_at = timestamp if body.get("interviewCompleted") or body.get("interviewCompletedAt") else None
         if status is not None and status not in STATUS_LABELS:
             self.send_json(400, {"error": "invalid_status"})
             return
@@ -3614,6 +3659,10 @@ class AppHandler(BaseHTTPRequestHandler):
                     custom_title = COALESCE(?, custom_title),
                     assessment_deadline_at = CASE WHEN ? THEN ? ELSE assessment_deadline_at END,
                     assessment_reminder_sent_at = CASE WHEN ? THEN NULL ELSE assessment_reminder_sent_at END,
+                    interview_deadline_at = CASE WHEN ? THEN ? ELSE interview_deadline_at END,
+                    interview_reminder_sent_at = CASE WHEN ? THEN NULL ELSE interview_reminder_sent_at END,
+                    assessment_completed_at = CASE WHEN ? THEN ? ELSE assessment_completed_at END,
+                    interview_completed_at = CASE WHEN ? THEN ? ELSE interview_completed_at END,
                     updated_at = ?
                 WHERE id = ? AND user_id = ?
                 """,
@@ -3621,10 +3670,17 @@ class AppHandler(BaseHTTPRequestHandler):
                     status,
                     notes,
                     custom_title,
-                    1 if deadline_provided else 0,
+                    1 if assessment_deadline_provided else 0,
                     assessment_deadline_at,
-                    1 if deadline_provided else 0,
-                    now(),
+                    1 if assessment_deadline_provided else 0,
+                    1 if interview_deadline_provided else 0,
+                    interview_deadline_at,
+                    1 if interview_deadline_provided else 0,
+                    1 if assessment_completed_provided else 0,
+                    assessment_completed_at,
+                    1 if interview_completed_provided else 0,
+                    interview_completed_at,
+                    timestamp,
                     app_id,
                     user["id"],
                 ),

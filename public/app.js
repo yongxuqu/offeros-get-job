@@ -216,7 +216,7 @@ const App = {
           <div class="auth-stack">
             <div><strong>简历一次维护</strong><span>结构化简历字段可复用于岗位匹配、网申填表和面试训练。</span></div>
             <div><strong>岗位自动匹配</strong><span>根据能力标签解释为什么匹配，也提示缺口和补强方向。</span></div>
-            <div><strong>进程持续可见</strong><span>收藏、投递、笔试、面试和 Offer 状态集中管理。</span></div>
+            <div><strong>进程持续可见</strong><span>准备投递、笔试、面试和 Offer 状态集中管理。</span></div>
           </div>
         </section>
         <section class="auth-card">
@@ -399,7 +399,7 @@ const App = {
         title: "隐私政策",
         updatedAt: "2026-08-20",
         sections: [
-          ["我们收集什么", "为提供服务，我们会保存邮箱账号、结构化简历、岗位收藏和投递状态、AI 面试报告、插件连接令牌以及必要的系统日志。语音面试不保存音视频原件，只保存转写后用于报告生成的结果和报告摘要。"],
+          ["我们收集什么", "为提供服务，我们会保存邮箱账号、结构化简历、岗位准备投递和投递状态、AI 面试报告、插件连接令牌以及必要的系统日志。语音面试不保存音视频原件，只保存转写后用于报告生成的结果和报告摘要。"],
           ["如何使用数据", "这些数据用于登录验证、简历解析、岗位匹配、投递看板、面试反馈、插件填表预览和基础运营统计。我们不会把你的简历公开展示给其他普通用户。"],
           ["第三方服务", "邮箱验证码会通过已配置的发信邮箱服务发送；简历解析、OCR、语音转文字和面试报告可能调用第三方 AI/API 服务。调用时会传入完成任务所需的最少内容。"],
           ["数据保存", "账号、简历、投递记录和报告会保存在服务端数据库中，便于你下次继续使用。系统会做数据库备份，备份仅用于故障恢复。"],
@@ -1380,7 +1380,7 @@ const App = {
             <div class="form-row">
               <label>加入状态</label>
               <select id="manual-status">
-                ${statuses.map(([status, label]) => `<option value="${this.escape(status)}" ${status === "saved" ? "selected" : ""}>${this.escape(label)}</option>`).join("")}
+                ${statuses.map(([status, label]) => `<option value="${this.escape(status)}" ${status === "preparing" ? "selected" : ""}>${this.escape(label)}</option>`).join("")}
               </select>
             </div>
             ${this.textField("manual-sourceUrl", "官方校招/网申链接", "", "url", "https://...")}
@@ -1432,13 +1432,16 @@ const App = {
   renderAssessmentDeadlineModal() {
     const modal = this.state.assessmentDeadlineModal;
     if (!modal) return "";
+    const isInterview = modal.kind === "interview";
+    const title = isInterview ? "面试时间" : "测评/笔试截止时间";
+    const clearLabel = isInterview ? "清除面试提醒" : "清除测评提醒";
     return `
       <div class="modal-backdrop" role="dialog" aria-modal="true">
         <section class="parse-modal application-edit-modal deadline-modal">
           <div class="modal-head">
             <span class="modal-indicator ok"></span>
             <div>
-              <h3>测评/笔试截止时间</h3>
+              <h3>${title}</h3>
               <p>${this.escape(modal.company || "")}${modal.title ? ` · ${this.escape(modal.title)}` : ""}</p>
             </div>
           </div>
@@ -1463,7 +1466,7 @@ const App = {
           </div>
           <div class="toolbar modal-actions">
             <button class="btn primary" onclick="App.saveAssessmentDeadlineModal()">保存</button>
-            <button class="btn" onclick="App.clearAssessmentDeadlineModal()">清除提醒</button>
+            <button class="btn" onclick="App.clearAssessmentDeadlineModal()">${clearLabel}</button>
             <button class="btn ghost" onclick="App.closeAssessmentDeadlineModal()">取消</button>
           </div>
         </section>
@@ -1530,7 +1533,7 @@ const App = {
       sourceUrl: this.getInput("manual-sourceUrl"),
       requirements: this.getInput("manual-requirements"),
       description: this.getInput("manual-description"),
-      status: this.getInput("manual-status") || "saved",
+      status: this.getInput("manual-status") || "preparing",
     };
   },
 
@@ -2210,10 +2213,9 @@ const App = {
         ${appStatus ? `<div class="muted">${this.escape(appStatus)}</div>` : ""}
         <div class="toolbar">
           <a class="btn small primary" href="${this.escape(job.sourceUrl)}" target="_blank" rel="noopener noreferrer">去投递</a>
-          <button class="btn small" onclick="App.addApplication(${job.id}, 'saved')">${app ? "改为收藏" : "收藏"}</button>
+          <button class="btn small" onclick="App.addApplication(${job.id}, 'preparing')">${app ? "改为准备投递" : "准备投递"}</button>
           <button class="btn small" onclick="App.addApplication(${job.id}, 'applied')">标记已投递</button>
           ${app ? `<button class="btn small danger" onclick="App.deleteApplication(${app.id})">取消加入</button>` : ""}
-          ${compact ? "" : `<button class="btn small" onclick="App.startInterview(${job.id})">练面试</button>`}
         </div>
       </article>
     `;
@@ -2227,7 +2229,7 @@ const App = {
       });
       const apps = await this.api("/api/applications");
       this.state.applications = apps.applications;
-      this.setNotice(status === "applied" ? "已加入投递看板：已投递。" : "已加入投递看板：已收藏。");
+      this.setNotice(status === "applied" ? "已加入投递看板：已投递。" : "已加入投递看板：准备投递。");
       this.render();
     } catch (error) {
       this.setError(`操作失败：${error.message}`);
@@ -2237,7 +2239,6 @@ const App = {
 
   applicationStatuses() {
     return [
-      ["saved", "已收藏"],
       ["preparing", "准备投递"],
       ["applied", "已投递"],
       ["test", "测评/笔试"],
@@ -2266,7 +2267,7 @@ const App = {
           .map(([status, label]) => {
             const items = this.state.applications.filter((item) => item.status === status);
             return `
-              <div class="kanban-column">
+              <div class="kanban-column" data-status="${this.escape(status)}" ondragover="App.allowApplicationDrop(event)" ondragleave="App.leaveApplicationDrop(event)" ondrop="App.dropApplication(event, '${this.escape(status)}')">
                 <h3>${label}<span>${items.length}</span></h3>
                 ${
                   items.length
@@ -2349,7 +2350,6 @@ const App = {
 
   applicationCard(item, statuses) {
     const actionLabels = {
-      saved: "去投递",
       preparing: "去投递",
       applied: "看进度",
       test: "去测评",
@@ -2364,9 +2364,8 @@ const App = {
     };
     const reviewLabel = reviewLabels[item.job.reviewStatus] || "";
     const positionTitle = this.applicationPositionTitle(item);
-    const deadlineLabel = item.assessmentDeadlineAt ? `截止 ${this.formatTimestampShort(item.assessmentDeadlineAt)}` : "截止时间";
     return `
-      <div class="application-card">
+      <div class="application-card" draggable="true" ondragstart="App.startApplicationDrag(event, ${item.id})" ondragend="App.endApplicationDrag(event)">
         <button class="application-remove" onclick="App.deleteApplication(${item.id})" aria-label="移出看板" title="移出看板">&times;</button>
         <strong class="application-title">
           <span>${this.escape(item.job.company)}</span>
@@ -2374,17 +2373,81 @@ const App = {
         </strong>
         <p>${this.escape(item.job.city)} · ${this.escape(item.job.batch || "未标注批次")} · ${this.escape(item.job.companyType || "未分类")} · 截止 ${this.escape(item.job.deadline)}</p>
         ${reviewLabel ? `<div class="review-badge ${this.escape(item.job.reviewStatus)}">${this.escape(reviewLabel)}</div>` : ""}
-        <select onchange="App.updateApplication(${item.id}, this.value)">
-          ${statuses.map(([status, label]) => `<option value="${status}" ${item.status === status ? "selected" : ""}>${label}</option>`).join("")}
-        </select>
+        ${this.applicationCompletionBadge(item)}
         ${actionLabel ? `
           <div class="application-actions">
             <a class="btn small application-action" href="${this.escape(actionUrl)}" target="_blank" rel="noopener noreferrer">${actionLabel}</a>
-            ${item.status === "test" ? `<button class="btn small application-action" onclick="App.setAssessmentDeadline(${item.id})">${this.escape(deadlineLabel)}</button>` : ""}
+            ${this.applicationStageButtons(item)}
           </div>
         ` : ""}
       </div>
     `;
+  },
+
+  applicationStageButtons(item) {
+    if (item.status === "test") {
+      const deadlineLabel = item.assessmentDeadlineAt ? `截止 ${this.formatTimestampShort(item.assessmentDeadlineAt)}` : "截止时间";
+      const completed = Boolean(item.assessmentCompletedAt);
+      return `
+        <button class="btn small application-action" onclick="App.setApplicationDeadline(${item.id}, 'assessment')">${this.escape(deadlineLabel)}</button>
+        <button class="btn small application-action ${completed ? "success" : ""}" onclick="App.toggleApplicationCompletion(${item.id}, 'assessment', ${completed ? "false" : "true"})">${completed ? "取消完成" : "已完成"}</button>
+      `;
+    }
+    if (item.status === "interview") {
+      const deadlineLabel = item.interviewDeadlineAt ? `面试 ${this.formatTimestampShort(item.interviewDeadlineAt)}` : "面试时间";
+      const completed = Boolean(item.interviewCompletedAt);
+      return `
+        <button class="btn small application-action" onclick="App.setApplicationDeadline(${item.id}, 'interview')">${this.escape(deadlineLabel)}</button>
+        <button class="btn small application-action ${completed ? "success" : ""}" onclick="App.toggleApplicationCompletion(${item.id}, 'interview', ${completed ? "false" : "true"})">${completed ? "取消完成" : "已完成"}</button>
+      `;
+    }
+    return "";
+  },
+
+  applicationCompletionBadge(item) {
+    if (item.status === "test" && item.assessmentCompletedAt) {
+      return `<div class="review-badge completed">测评/笔试已完成</div>`;
+    }
+    if (item.status === "interview" && item.interviewCompletedAt) {
+      return `<div class="review-badge completed">面试已完成</div>`;
+    }
+    return "";
+  },
+
+  startApplicationDrag(event, id) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", String(id));
+    event.currentTarget.classList.add("dragging");
+  },
+
+  endApplicationDrag(event) {
+    event.currentTarget.classList.remove("dragging");
+    document.querySelectorAll(".kanban-column.drag-over").forEach((element) => element.classList.remove("drag-over"));
+  },
+
+  allowApplicationDrop(event) {
+    event.preventDefault();
+    event.currentTarget.classList.add("drag-over");
+  },
+
+  leaveApplicationDrop(event) {
+    if (!event.currentTarget.contains(event.relatedTarget)) {
+      event.currentTarget.classList.remove("drag-over");
+    }
+  },
+
+  async dropApplication(event, status) {
+    event.preventDefault();
+    event.currentTarget.classList.remove("drag-over");
+    const id = Number(event.dataTransfer.getData("text/plain"));
+    const item = this.state.applications.find((entry) => Number(entry.id) === id);
+    if (!item || item.status === status) return;
+    try {
+      await this.patchApplication(id, { status }, `已移动到${this.applicationStatuses().find(([key]) => key === status)?.[1] || "新状态"}。`);
+    } catch (error) {
+      this.setError(`移动失败：${error.message}`);
+      this.render();
+    }
   },
 
   async patchApplication(id, payload, notice = "") {
@@ -2448,14 +2511,16 @@ const App = {
     }
   },
 
-  setAssessmentDeadline(id) {
+  setApplicationDeadline(id, kind = "assessment") {
     const item = this.state.applications.find((entry) => entry.id === id);
     if (!item) return;
-    const currentText = this.formatTimestampInput(item.assessmentDeadlineAt);
+    const deadlineAt = kind === "interview" ? item.interviewDeadlineAt : item.assessmentDeadlineAt;
+    const currentText = this.formatTimestampInput(deadlineAt);
     const currentDate = currentText ? currentText.slice(0, 10) : this.formatDateValue(new Date());
     const currentTime = currentText ? currentText.slice(11).split(":") : ["18", "00"];
     this.state.assessmentDeadlineModal = {
       id,
+      kind,
       company: item.job?.company || "",
       title: this.applicationPositionTitle(item),
       date: currentDate,
@@ -2464,6 +2529,10 @@ const App = {
       minute: this.minuteOptions().includes(currentTime[1]) ? currentTime[1] : "00",
     };
     this.render();
+  },
+
+  setAssessmentDeadline(id) {
+    this.setApplicationDeadline(id, "assessment");
   },
 
   closeAssessmentDeadlineModal() {
@@ -2497,20 +2566,23 @@ const App = {
 
   async saveAssessmentDeadlineModal() {
     const modal = this.state.assessmentDeadlineModal;
+    const isInterview = modal?.kind === "interview";
     if (!modal?.date) {
-      this.setError("请选择测评/笔试截止日期。");
+      this.setError(isInterview ? "请选择面试日期。" : "请选择测评/笔试截止日期。");
       this.render();
       return;
     }
     const hour = document.querySelector("#assessment-hour")?.value || modal.hour || "18";
     const minute = document.querySelector("#assessment-minute")?.value || modal.minute || "00";
     const value = `${modal.date} ${hour}:${minute}`;
+    const payloadKey = isInterview ? "interviewDeadlineAt" : "assessmentDeadlineAt";
+    const notice = isInterview ? "面试时间已设置，开始前 3 小时会邮件提醒。" : "测评/笔试截止时间已设置，截止前 3 小时会邮件提醒。";
     try {
       this.state.assessmentDeadlineModal = null;
       await this.patchApplication(
         modal.id,
-        { assessmentDeadlineAt: value },
-        "测评/笔试截止时间已设置，截止前 3 小时会邮件提醒。",
+        { [payloadKey]: value },
+        notice,
       );
     } catch (error) {
       this.setError(`设置截止时间失败：${error.message}`);
@@ -2521,11 +2593,26 @@ const App = {
   async clearAssessmentDeadlineModal() {
     const modal = this.state.assessmentDeadlineModal;
     if (!modal) return;
+    const isInterview = modal.kind === "interview";
+    const payloadKey = isInterview ? "interviewDeadlineAt" : "assessmentDeadlineAt";
+    const notice = isInterview ? "面试提醒已清除。" : "测评/笔试提醒已清除。";
     try {
       this.state.assessmentDeadlineModal = null;
-      await this.patchApplication(modal.id, { assessmentDeadlineAt: "" }, "测评/笔试提醒已清除。");
+      await this.patchApplication(modal.id, { [payloadKey]: "" }, notice);
     } catch (error) {
       this.setError(`设置截止时间失败：${error.message}`);
+      this.render();
+    }
+  },
+
+  async toggleApplicationCompletion(id, kind, completed) {
+    const isInterview = kind === "interview";
+    const label = isInterview ? "面试" : "测评/笔试";
+    const payload = isInterview ? { interviewCompleted: completed } : { assessmentCompleted: completed };
+    try {
+      await this.patchApplication(id, payload, completed ? `${label}已标记完成。` : `${label}完成标记已取消。`);
+    } catch (error) {
+      this.setError(`更新完成状态失败：${error.message}`);
       this.render();
     }
   },
