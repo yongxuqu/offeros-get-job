@@ -13,6 +13,9 @@ const App = {
     jobsPage: 1,
     jobsPerPage: 120,
     query: "",
+    queryDraft: "",
+    jobSuggestions: [],
+    jobSuggestionsOpen: false,
     category: "all",
     city: "all",
     companyType: "all",
@@ -38,7 +41,9 @@ const App = {
   parseTimer: null,
   toastTimer: null,
   jobSearchTimer: null,
+  jobSuggestionTimer: null,
   jobRequestId: 0,
+  jobSuggestionRequestId: 0,
   composingQuery: false,
   matchCache: new Map(),
   matchContext: null,
@@ -1682,7 +1687,13 @@ const App = {
       </section>
       <section class="panel" id="jobs-panel">
         <div class="toolbar">
-          <input id="job-search" value="${this.escape(this.state.query)}" placeholder="搜索公司、岗位、城市、能力、企业类型" oncompositionstart="App.startQueryComposition()" oncompositionend="App.endQueryComposition(this.value)" oninput="App.setQuery(this.value, event)" />
+          <div class="job-search-box">
+            <input id="job-search" value="${this.escape(this.state.queryDraft ?? this.state.query)}" placeholder="搜索公司、岗位、城市、能力、企业类型" autocomplete="off" oncompositionstart="App.startQueryComposition()" oncompositionend="App.endQueryComposition(this.value)" oninput="App.setQuery(this.value, event)" onkeydown="App.handleJobSearchKeydown(event)" onfocus="App.openJobSuggestions()" onblur="setTimeout(() => App.closeJobSuggestions(), 140)" />
+            <button class="btn primary job-search-submit" onclick="App.submitJobSearch()">搜索</button>
+            <div id="job-suggestions" class="job-suggestions ${this.state.jobSuggestionsOpen && this.state.jobSuggestions.length ? "open" : ""}">
+              ${this.jobSuggestionsHtml()}
+            </div>
+          </div>
           <select onchange="App.setCity(this.value)">
             ${cities.map((item) => `<option value="${this.escape(item)}" ${this.state.city === item ? "selected" : ""}>${item === "all" ? "全部城市" : this.escape(item)}</option>`).join("")}
           </select>
@@ -1906,24 +1917,133 @@ const App = {
   },
 
   setQuery(value, event = null) {
-    this.state.query = value;
-    this.state.jobsPage = 1;
+    this.state.queryDraft = value;
     this.state.selectedCompanyKey = "";
     this.jobRequestId += 1;
     if (this.jobSearchTimer) clearTimeout(this.jobSearchTimer);
+    if (this.jobSuggestionTimer) clearTimeout(this.jobSuggestionTimer);
     if (this.composingQuery || event?.isComposing) return;
-    this.jobSearchTimer = setTimeout(() => this.reloadJobs(), 520);
+
+    const keyword = value.trim();
+    if (!keyword) {
+      this.jobSuggestionRequestId += 1;
+      this.state.jobSuggestions = [];
+      this.state.jobSuggestionsOpen = false;
+      this.updateJobSuggestionLayer();
+      return;
+    }
+
+    this.state.jobSuggestionsOpen = true;
+    this.jobSuggestionTimer = setTimeout(() => this.loadJobSuggestions(keyword), 180);
   },
 
   startQueryComposition() {
     this.composingQuery = true;
     if (this.jobSearchTimer) clearTimeout(this.jobSearchTimer);
+    if (this.jobSuggestionTimer) clearTimeout(this.jobSuggestionTimer);
     this.jobRequestId += 1;
   },
 
   endQueryComposition(value) {
     this.composingQuery = false;
     this.setQuery(value);
+  },
+
+  async loadJobSuggestions(keyword = this.state.queryDraft.trim()) {
+    const requestId = ++this.jobSuggestionRequestId;
+    if (!keyword) {
+      this.state.jobSuggestions = [];
+      this.state.jobSuggestionsOpen = false;
+      this.updateJobSuggestionLayer();
+      return;
+    }
+    const params = new URLSearchParams({
+      q: keyword,
+      batch: this.state.batch,
+      limit: "8",
+    });
+    if (this.state.city !== "all") params.set("city", this.state.city);
+    if (this.state.companyType !== "all") params.set("companyType", this.state.companyType);
+    try {
+      const data = await this.api(`/api/jobs/suggestions?${params.toString()}`);
+      if (requestId !== this.jobSuggestionRequestId || keyword !== this.state.queryDraft.trim()) return;
+      this.state.jobSuggestions = data.suggestions || [];
+      this.state.jobSuggestionsOpen = Boolean(this.state.jobSuggestions.length);
+      this.updateJobSuggestionLayer();
+    } catch {
+      if (requestId !== this.jobSuggestionRequestId) return;
+      this.state.jobSuggestions = [];
+      this.state.jobSuggestionsOpen = false;
+      this.updateJobSuggestionLayer();
+    }
+  },
+
+  jobSuggestionsHtml() {
+    if (!this.state.jobSuggestionsOpen || !this.state.jobSuggestions.length) return "";
+    return `
+      <div class="job-suggestions-title">候选建议</div>
+      ${this.state.jobSuggestions
+        .map((item) => `
+          <button class="job-suggestion-item" type="button" onmousedown="event.preventDefault()" data-value="${this.escape(item.value)}" onclick="App.chooseJobSuggestion(this.dataset.value)">
+            <span>
+              <strong>${this.escape(item.label || item.value)}</strong>
+              <small>${this.escape([item.type, item.detail].filter(Boolean).join(" · "))}</small>
+            </span>
+          </button>
+        `)
+        .join("")}
+    `;
+  },
+
+  updateJobSuggestionLayer() {
+    const layer = document.querySelector("#job-suggestions");
+    if (!layer) return;
+    layer.classList.toggle("open", Boolean(this.state.jobSuggestionsOpen && this.state.jobSuggestions.length));
+    layer.innerHTML = this.jobSuggestionsHtml();
+  },
+
+  openJobSuggestions() {
+    if (!this.state.queryDraft.trim() || !this.state.jobSuggestions.length) return;
+    this.state.jobSuggestionsOpen = true;
+    this.updateJobSuggestionLayer();
+  },
+
+  closeJobSuggestions() {
+    this.state.jobSuggestionsOpen = false;
+    this.updateJobSuggestionLayer();
+  },
+
+  handleJobSearchKeydown(event) {
+    if (event.key === "Escape") {
+      this.closeJobSuggestions();
+      return;
+    }
+    if (event.key === "Enter" && !this.composingQuery && !event.isComposing) {
+      event.preventDefault();
+      this.submitJobSearch(event.currentTarget.value);
+    }
+  },
+
+  chooseJobSuggestion(value) {
+    this.state.queryDraft = value;
+    const input = document.querySelector("#job-search");
+    if (input) input.value = value;
+    this.submitJobSearch(value);
+  },
+
+  submitJobSearch(value = null) {
+    const inputValue = value ?? document.querySelector("#job-search")?.value ?? this.state.queryDraft;
+    const keyword = String(inputValue || "").trim();
+    this.state.queryDraft = keyword;
+    this.state.query = keyword;
+    this.state.jobsPage = 1;
+    this.state.selectedCompanyKey = "";
+    this.state.jobSuggestions = [];
+    this.state.jobSuggestionsOpen = false;
+    this.jobSuggestionRequestId += 1;
+    if (this.jobSearchTimer) clearTimeout(this.jobSearchTimer);
+    if (this.jobSuggestionTimer) clearTimeout(this.jobSuggestionTimer);
+    this.reloadJobs();
   },
 
   setCategory(value) {

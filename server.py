@@ -93,41 +93,21 @@ AI_OCR_TIMEOUT = max(10, min(120, int(os.getenv("AI_OCR_TIMEOUT", "45") or 45)))
 AI_RESUME_PARSE_TIMEOUT = max(10, min(120, int(os.getenv("AI_RESUME_PARSE_TIMEOUT", "35") or 35)))
 RESUME_PARSE_SOFT_TIMEOUT = max(20, min(180, int(os.getenv("RESUME_PARSE_SOFT_TIMEOUT", "70") or 70)))
 RESUME_PARSE_JOB_TTL = max(300, min(7200, int(os.getenv("RESUME_PARSE_JOB_TTL", "1800") or 1800)))
-
-
-def load_tencent_job_sources() -> list:
-    raw_sources = os.getenv("TENCENT_JOB_SOURCES", "").strip()
-    if not raw_sources:
-        return []
-    try:
-        parsed = json.loads(raw_sources)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(parsed, list):
-        return []
-    sources = []
-    for item in parsed:
-        if not isinstance(item, dict):
-            continue
-        tab = str(item.get("tab") or "").strip()
-        kind = str(item.get("kind") or "sheet").strip()
-        if not tab or kind not in {"sheet", "smart"}:
-            continue
-        source = {
-            "name": str(item.get("name") or tab).strip(),
-            "tab": tab,
-            "kind": kind,
-        }
-        view_id = str(item.get("view_id") or item.get("viewId") or "").strip()
-        if view_id:
-            source["view_id"] = view_id
-        sources.append(source)
-    return sources
-
-
-TENCENT_DOC_ID = os.getenv("TENCENT_DOC_ID", "").strip()
+TENCENT_DOC_ID = os.getenv("TENCENT_DOC_ID", "")
 TENCENT_LINK_OVERRIDES_PATH = os.getenv("TENCENT_LINK_OVERRIDES_PATH", "seed/tencent_job_link_overrides.json")
-TENCENT_JOB_SOURCES = load_tencent_job_sources()
+TENCENT_JOB_SOURCES = [source for source in [
+    {
+        "name": os.getenv("TENCENT_SOURCE_1_NAME", "Tencent sheet source 1"),
+        "tab": os.getenv("TENCENT_SOURCE_1_TAB", ""),
+        "view_id": os.getenv("TENCENT_SOURCE_1_VIEW_ID", ""),
+        "kind": "smart",
+    },
+    {
+        "name": os.getenv("TENCENT_SOURCE_2_NAME", "Tencent sheet source 2"),
+        "tab": os.getenv("TENCENT_SOURCE_2_TAB", ""),
+        "kind": "sheet",
+    },
+] if source.get("tab")]
 JOB_BATCHES = ("27届秋招", "实习", "26届春招")
 DEFAULT_SYNC_START_DATE = "2026-07-01"
 DEFAULT_SYNC_END_DATE = "2026-08-18"
@@ -2006,21 +1986,7 @@ def tencent_company_key(value: str) -> str:
     text = re.sub(r"[（(].*?[）)]", "", text)
     text = re.split(r"[-－—–·•｜|]", text, maxsplit=1)[0]
     key = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", text)
-    for token in (
-        "有限责任公司",
-        "股份有限公司",
-        "有限公司",
-        "集团股份",
-        "集团",
-        "控股",
-        "科技",
-        "技术",
-        "公司",
-        "校招计划",
-        "校园招聘",
-        "校招",
-        "招聘",
-    ):
+    for token in ("有限责任公司", "股份有限公司", "有限公司", "集团股份", "集团", "控股", "科技", "技术", "公司", "校招计划", "校园招聘", "校招", "招聘"):
         key = key.replace(token, "")
     return key
 
@@ -2217,6 +2183,21 @@ def deadline_is_valid(value, min_deadline) -> bool:
     return not parsed or parsed >= min_deadline
 
 
+EXPIRED_TENCENT_SOURCE_URLS = {
+    # ByteDance 2027 AI PM early-bird channel. Public mirrors list the end date as 2026-08-02.
+    "https://wj.toutiao.com/q/v2/7657509120173735979/975xOc70/4d7d/#/",
+}
+
+
+def tencent_source_is_expired(*urls) -> bool:
+    cleaned_urls = set()
+    for url in urls:
+        cleaned_url = clean_url(url)
+        if cleaned_url:
+            cleaned_urls.add(cleaned_url)
+    return bool(cleaned_urls & EXPIRED_TENCENT_SOURCE_URLS)
+
+
 def tencent_campus_url_score(value) -> int:
     url = clean_url(value)
     if not url:
@@ -2318,6 +2299,11 @@ def build_tencent_link_override_map(overrides: list) -> dict:
     return override_map
 
 
+def find_tencent_link_override(row: dict, override_map: dict):
+    candidates = override_map.get(tencent_row_fallback_key(row)) or []
+    return candidates[0] if candidates else None
+
+
 def tencent_row_fallback_key(row: dict) -> tuple:
     normalized = normalize_csv_row(row)
     return (tencent_company_key(normalized.get("company")), normalize_job_batch(normalized.get("batch") or ""))
@@ -2325,11 +2311,6 @@ def tencent_row_fallback_key(row: dict) -> tuple:
 
 def tencent_job_fallback_key(job: dict) -> tuple:
     return (tencent_company_key(job.get("company")), normalize_job_batch(job.get("batch") or ""))
-
-
-def find_tencent_link_override(row: dict, override_map: dict):
-    candidates = override_map.get(tencent_row_fallback_key(row)) or []
-    return candidates[0] if candidates else None
 
 
 def find_tencent_company_link_fallback(row: dict, fallback_jobs: dict):
@@ -2414,6 +2395,8 @@ def tencent_row_to_job(row: dict, start_date, end_date, min_deadline):
         return None, "缺公司名称"
     if not source_url:
         return None, "缺投递/公告链接"
+    if tencent_source_is_expired(delivery_url, announcement_url, source_url):
+        return None, "已确认过期链接"
 
     positions = clean_text(normalized.get("title"))
     if tencent_text_looks_like_commentary(positions):
@@ -2889,6 +2872,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.handle_resume_parse_file()
             elif method == "GET" and path.startswith("/api/resume/parse-jobs/"):
                 self.handle_resume_parse_job(path)
+            elif method == "GET" and path == "/api/jobs/suggestions":
+                self.handle_job_suggestions()
             elif method == "GET" and path == "/api/jobs":
                 self.handle_jobs()
             elif method == "GET" and path == "/api/applications":
@@ -3291,6 +3276,102 @@ class AppHandler(BaseHTTPRequestHandler):
                 },
             },
         )
+
+    def handle_job_suggestions(self) -> None:
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+
+        def first_param(name: str, default: str = "") -> str:
+            return clean_text((query.get(name) or [default])[0])
+
+        keyword = first_param("q")
+        if not keyword:
+            self.send_json(200, {"suggestions": []})
+            return
+        try:
+            limit = int(first_param("limit", "8") or 8)
+        except ValueError:
+            limit = 8
+        limit = max(1, min(limit, 10))
+
+        clauses = ["review_status = 'approved'"]
+        values = []
+        batch = first_param("batch")
+        city = first_param("city")
+        company_type = first_param("companyType")
+        if batch and batch != "all":
+            clauses.append("batch = ?")
+            values.append(batch)
+        if city and city != "all":
+            clauses.append("city LIKE ?")
+            values.append(f"%{city}%")
+        if company_type and company_type != "all":
+            clauses.append("company_type = ?")
+            values.append(company_type)
+
+        like = f"%{keyword}%"
+        clauses.append("(company LIKE ? OR title LIKE ? OR city LIKE ? OR category LIKE ? OR company_type LIKE ? OR requirements LIKE ?)")
+        values.extend([like, like, like, like, like, like])
+        where_sql = f"WHERE {' AND '.join(clauses)}"
+        prefix = f"{keyword}%"
+
+        with connect_db() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT company, title, city, category, company_type, batch, requirements, updated_at
+                FROM jobs
+                {where_sql}
+                ORDER BY
+                  CASE
+                    WHEN company LIKE ? THEN 0
+                    WHEN title LIKE ? THEN 1
+                    WHEN category LIKE ? THEN 2
+                    WHEN city LIKE ? THEN 3
+                    ELSE 4
+                  END,
+                  updated_at DESC,
+                  company ASC
+                LIMIT 80
+                """,
+                values + [prefix, prefix, prefix, prefix],
+            ).fetchall()
+
+        needle = keyword.lower()
+        suggestions = []
+        seen = set()
+
+        def add(kind: str, value: str, detail: str = "") -> None:
+            text = clean_text(value)
+            if not text or needle not in text.lower():
+                return
+            key = (kind, text)
+            if key in seen or len(suggestions) >= limit:
+                return
+            seen.add(key)
+            suggestions.append(
+                {
+                    "type": kind,
+                    "value": text,
+                    "label": text,
+                    "detail": clean_text(detail),
+                }
+            )
+
+        for row in rows:
+            add("公司", row["company"], " · ".join(part for part in [row["city"], row["company_type"]] if part))
+            title = display_job_title(row["title"])
+            add("岗位", title, " · ".join(part for part in [row["company"], row["city"]] if part))
+            add("方向", row["category"], " · ".join(part for part in [row["batch"], row["company_type"]] if part))
+            add("城市", row["city"], "工作地点")
+            try:
+                requirements = json.loads(row["requirements"] or "[]")
+            except json.JSONDecodeError:
+                requirements = []
+            for requirement in requirements:
+                add("能力", requirement, row["company"])
+            if len(suggestions) >= limit:
+                break
+
+        self.send_json(200, {"suggestions": suggestions})
 
     def handle_get_applications(self) -> None:
         user = self.require_user()

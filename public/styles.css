@@ -763,6 +763,90 @@ select:focus {
   max-width: 260px;
 }
 
+.job-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 460px;
+  max-width: 620px;
+  min-width: 280px;
+}
+
+.toolbar .job-search-box input {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+
+.job-search-submit {
+  flex: 0 0 auto;
+  min-width: 72px;
+}
+
+.job-suggestions {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  display: none;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(17, 20, 27, 0.96);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(18px);
+}
+
+.job-suggestions.open {
+  display: grid;
+}
+
+.job-suggestions-title {
+  padding: 4px 8px 6px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.job-suggestion-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.job-suggestion-item:hover,
+.job-suggestion-item:focus {
+  border-color: rgba(120, 243, 255, 0.36);
+  background: rgba(120, 243, 255, 0.12);
+  outline: none;
+}
+
+.job-suggestion-item strong,
+.job-suggestion-item small {
+  display: block;
+}
+
+.job-suggestion-item strong {
+  font-size: 14px;
+}
+
+.job-suggestion-item small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .section-actions {
   justify-content: flex-end;
   margin-bottom: 0;
