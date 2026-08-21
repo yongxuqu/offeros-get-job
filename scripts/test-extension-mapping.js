@@ -9,7 +9,8 @@ class FakeElement {
     this.name = this.attrs.name || "";
     this.value = config.value || "";
     this.disabled = false;
-    this.readOnly = false;
+    this.readOnly = Boolean(config.readOnly || this.attrs.readOnly);
+    this.customControl = Boolean(config.customControl);
     this.offsetParent = {};
     this.sectionTitle = config.sectionTitle || "";
     this.options = (config.options || []).map((option) => ({
@@ -31,6 +32,9 @@ class FakeElement {
   }
 
   closest(selector) {
+    if (this.customControl && selector.includes(".el-select")) {
+      return {};
+    }
     if (selector.includes("section") && this.sectionTitle) {
       return {
         querySelector: () => ({
@@ -51,7 +55,7 @@ function loadContentScript(fields, labels) {
     Event: class {},
     document: {
       querySelectorAll: (selector) => {
-        if (selector === "input, textarea, select") return fields;
+        if (selector.includes("input")) return fields;
         return [];
       },
       querySelector: (selector) => {
@@ -73,6 +77,8 @@ function input(id, label, attrs = {}, sectionTitle = "") {
     element: new FakeElement({
       attrs: { id, name: id, type: attrs.type || "text", placeholder: attrs.placeholder || "" },
       tagName: attrs.tagName || "input",
+      readOnly: attrs.readOnly,
+      customControl: attrs.customControl,
       sectionTitle
     }),
     label
@@ -84,6 +90,7 @@ const cases = [
   input("familyName", "姓"),
   input("givenName", "名"),
   input("school", "学校名称", {}, "教育经历"),
+  input("rankSelect", "年级排名", { readOnly: true, customControl: true }, "教育经历"),
   input("company", "公司名称", {}, "实习经历"),
   input("position", "职位", {}, "实习经历"),
   input("projectStart", "开始时间", { type: "date" }, "项目经历"),
@@ -103,6 +110,7 @@ const profile = {
   "profile.email": "zhang@example.com",
   "profile.idNumber": "110101199901010000",
   "education.0.schoolName": "某某大学",
+  "education.0.rank": "前10%",
   "internships.0.company": "星云科技",
   "internships.0.position": "产品运营实习生",
   "projects.0.startDate": "2025-01-01",
@@ -119,6 +127,7 @@ const expectations = {
   familyName: "profile.familyName",
   givenName: "profile.givenName",
   school: "education.0.schoolName",
+  rankSelect: "education.0.rank",
   company: "internships.0.company",
   position: "internships.0.position",
   projectStart: "projects.0.startDate",
@@ -155,6 +164,7 @@ const fillExpectations = {
   familyName: "张",
   givenName: "同学",
   school: "某某大学",
+  rankSelect: "",
   company: "星云科技",
   position: "产品运营实习生",
   projectStart: "2025-01-01",
@@ -169,6 +179,11 @@ for (const [id, expected] of Object.entries(fillExpectations)) {
     failed = true;
     console.error(`Expected filled ${id} -> ${expected || "空"}, got ${actual || "空"}`);
   }
+}
+
+if (byId.rankSelect?.canFill) {
+  failed = true;
+  console.error("自定义只读下拉不应该默认自动填充");
 }
 
 if (failed) process.exit(1);

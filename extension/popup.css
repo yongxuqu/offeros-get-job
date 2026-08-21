@@ -182,6 +182,10 @@ button:hover {
   background: rgba(120, 243, 255, 0.055);
 }
 
+.mapping-row.manual-fill {
+  border-color: rgba(255, 204, 102, 0.28);
+}
+
 .mapping-row.disabled {
   opacity: 0.62;
 }
@@ -233,6 +237,20 @@ button:hover {
 .mapping-state {
   padding: 3px 7px;
   font-size: 11px;
+}
+
+.mapping-state.ok {
+  border-color: rgba(126, 245, 209, 0.34);
+  color: var(--ok);
+}
+
+.mapping-state.warn {
+  border-color: rgba(255, 204, 102, 0.34);
+  color: #ffd98a;
+}
+
+.mapping-state.muted {
+  color: var(--muted);
 }
 
 .empty {

@@ -17,16 +17,16 @@ const FIELD_RULES = [
   { field: "profile.familyName", label: "姓", sensitive: false, patterns: ["姓", "姓氏", "last name", "family name", "surname"] },
   { field: "profile.givenName", label: "名", sensitive: false, patterns: ["名", "名字", "first name", "given name"] },
   { field: "profile.name", label: "姓名", sensitive: false, patterns: ["真实姓名", "中文姓名", "中文名", "姓名", "full name", "name"] },
-  { field: "education.0.startDate", label: "教育开始时间", sensitive: false, patterns: ["教育开始时间", "入学时间", "就读开始", "入校时间", "start date"] },
-  { field: "education.0.endDate", label: "教育结束时间", sensitive: false, patterns: ["教育结束时间", "毕业时间", "就读结束", "毕业年月", "end date"] },
-  { field: "education.0.schoolName", label: "学校名称", sensitive: false, patterns: ["学校名称", "毕业院校", "所在学校", "就读学校", "学校", "院校", "university", "school"] },
+  { field: "education.0.startDate", label: "教育开始时间", sensitive: false, patterns: ["教育开始时间", "入学时间", "就读开始", "入校时间", "开始年月", "start date"] },
+  { field: "education.0.endDate", label: "教育结束时间", sensitive: false, patterns: ["教育结束时间", "毕业时间", "就读结束", "毕业年月", "结束年月", "end date"] },
+  { field: "education.0.schoolName", label: "学校名称", sensitive: false, patterns: ["学校名称", "学校中文名称", "学校全称", "院校名称", "毕业院校", "所在学校", "就读学校", "学校", "院校", "university", "school"] },
   { field: "education.0.studyLocation", label: "就读地", sensitive: false, patterns: ["目前就读地", "就读地", "就读城市", "学校所在地"] },
-  { field: "education.0.college", label: "院系", sensitive: false, patterns: ["院系", "学院", "college", "department"] },
-  { field: "education.0.major", label: "专业", sensitive: false, patterns: ["专业名称", "所学专业", "专业", "major"] },
-  { field: "education.0.rank", label: "成绩排名", sensitive: false, patterns: ["成绩排名", "专业排名", "排名", "rank"] },
-  { field: "education.0.gpaBase", label: "GPA Base", sensitive: false, patterns: ["gpa base", "绩点满分", "满绩", "满分"] },
-  { field: "education.0.gpa", label: "GPA", sensitive: false, patterns: ["gpa", "绩点"] },
-  { field: "education.0.degree", label: "学历", sensitive: false, patterns: ["最高学历", "学历", "学位", "degree", "education"] },
+  { field: "education.0.college", label: "院系", sensitive: false, patterns: ["院系名称", "学院名称", "院系", "学院", "college", "department"] },
+  { field: "education.0.major", label: "专业", sensitive: false, patterns: ["专业中文名称", "专业名称", "所学专业", "专业", "major"] },
+  { field: "education.0.rank", label: "成绩排名", sensitive: false, patterns: ["成绩排名", "专业排名", "年级排名", "班级排名", "排名", "rank"] },
+  { field: "education.0.gpaBase", label: "GPA Base", sensitive: false, patterns: ["gpa base", "gps-base", "gpsbase", "绩点满分", "满绩", "满分"] },
+  { field: "education.0.gpa", label: "GPA", sensitive: false, patterns: ["平均绩点", "绩点成绩", "gpa", "绩点"] },
+  { field: "education.0.degree", label: "学历", sensitive: false, patterns: ["最高学历", "学历层次", "学历类型", "学位类型", "最高学位", "学历", "学位", "degree", "education"] },
   { field: "internships.0.company", label: "实习公司", sensitive: false, patterns: ["实习公司", "公司名称", "工作单位", "任职公司", "所在公司", "公司", "单位", "company", "employer"] },
   { field: "internships.0.position", label: "实习职位", sensitive: false, patterns: ["实习职位", "职位名称", "岗位名称", "任职岗位", "工作职位", "职位", "岗位", "position", "job title"] },
   { field: "internships.0.startDate", label: "实习开始时间", sensitive: false, patterns: ["实习开始时间", "工作开始时间", "入职时间", "起始时间", "开始时间", "start date"] },
@@ -53,7 +53,18 @@ const FIELD_RULES = [
 
 const FIELD_META = Object.fromEntries(FIELD_RULES.map((rule) => [rule.field, rule]));
 const IGNORED_TYPES = new Set(["hidden", "password", "submit", "button", "file", "image", "reset"]);
-const FORM_ITEM_SELECTOR = ".ant-form-item, .el-form-item, .form-item, .form-group, .field, .moka-form-item, .moka-form-row, .form-row, li, td";
+const FIELD_SELECTOR = "input, textarea, select, [contenteditable='true'], [role='textbox']";
+const CUSTOM_CONTROL_SELECTOR = [
+  ".el-select",
+  ".el-cascader",
+  ".el-date-editor",
+  ".el-time-picker",
+  ".ant-select",
+  ".ant-picker",
+  ".ant-cascader-picker",
+  "[role='combobox']"
+].join(",");
+const FORM_ITEM_SELECTOR = ".ant-form-item, .ant-row, .el-form-item, .el-form-item--default, .form-item, .form-group, .field, .moka-form-item, .moka-form-row, .form-row, li, td";
 const LABEL_SELECTOR = [
   ".ant-form-item-label",
   ".el-form-item__label",
@@ -67,7 +78,7 @@ const LABEL_SELECTOR = [
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.3.2" });
+    sendResponse({ ok: true, version: "0.3.3" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -140,6 +151,7 @@ function describeField(element, index, profile) {
     value: normalizeValueForElement(element, value),
     currentValue: getElementValue(element),
     elementType: elementTypeName(element),
+    elementFillable: isFillableElement(element),
     canFill: Boolean(inferred.field && value && isFillableElement(element)),
     canAutoSelect: Boolean(inferred.field && value && inferred.score >= 72 && !inferred.sensitive && isFillableElement(element)),
     filled: false
@@ -160,15 +172,18 @@ function withManualField(mapping, profile, field) {
     };
   }
   const meta = FIELD_META[field] || { field, label: field, sensitive: false };
+  const element = findElementByMapping(mapping);
   const value = getProfileValue(profile, field);
+  const elementFillable = isFillableElement(element);
   return {
     ...mapping,
     field,
     fieldLabel: meta.label,
     confidence: mapping.field === field ? mapping.confidence : "手动",
     sensitive: Boolean(meta.sensitive),
-    value: normalizeValueForElement(findElementByMapping(mapping), value),
-    canFill: Boolean(value),
+    value: normalizeValueForElement(element, value),
+    elementFillable,
+    canFill: Boolean(value && elementFillable),
     canAutoSelect: false
   };
 }
@@ -179,15 +194,75 @@ function findElementByMapping(mapping) {
 
 function getFields() {
   const seenRadioGroups = new Set();
-  return [...document.querySelectorAll("input, textarea, select")].filter((element) => {
+  const candidates = [...document.querySelectorAll(FIELD_SELECTOR)].filter((element) => {
     const type = (element.getAttribute("type") || "").toLowerCase();
-    const hidden = element.offsetParent === null && element.getClientRects().length === 0;
+    const hidden = isHiddenElement(element);
     if (type === "radio" && element.name) {
       if (seenRadioGroups.has(element.name)) return false;
       seenRadioGroups.add(element.name);
     }
-    return !hidden && !element.disabled && !element.readOnly && !IGNORED_TYPES.has(type);
+    const readonly = element.readOnly && !isReadonlyCustomControl(element);
+    return !(hidden || element.disabled || readonly || IGNORED_TYPES.has(type));
   });
+  return dedupeFieldCandidates(candidates);
+}
+
+function isHiddenElement(element) {
+  return element.offsetParent === null && element.getClientRects().length === 0;
+}
+
+function isReadonlyCustomControl(element) {
+  return Boolean(element.readOnly && element.closest?.(CUSTOM_CONTROL_SELECTOR));
+}
+
+function dedupeFieldCandidates(elements) {
+  const groupIds = new WeakMap();
+  let nextGroupId = 1;
+  const groupIndex = new Map();
+  const result = [];
+
+  elements.forEach((element) => {
+    const key = duplicateGroupKey(element, groupIds, () => nextGroupId++);
+    if (!key) {
+      result.push(element);
+      return;
+    }
+
+    const existingIndex = groupIndex.get(key);
+    if (existingIndex === undefined) {
+      groupIndex.set(key, result.length);
+      result.push(element);
+      return;
+    }
+
+    const existing = result[existingIndex];
+    const duplicateIsInternal = isReadonlyCustomControl(element) || isReadonlyCustomControl(existing);
+    if (!duplicateIsInternal) {
+      result.push(element);
+      return;
+    }
+    if (preferFieldCandidate(element, existing)) {
+      result[existingIndex] = element;
+    }
+  });
+
+  return result;
+}
+
+function duplicateGroupKey(element, groupIds, nextId) {
+  const formItem = element.closest?.(FORM_ITEM_SELECTOR);
+  const label = componentLabel(element) || labelForId(element) || element.getAttribute("aria-label") || "";
+  if (!formItem || !label) return "";
+  if (!groupIds.has(formItem)) groupIds.set(formItem, nextId());
+  return `${groupIds.get(formItem)}:${normalize(label)}`;
+}
+
+function preferFieldCandidate(candidate, existing) {
+  const candidateReadonly = isReadonlyCustomControl(candidate);
+  const existingReadonly = isReadonlyCustomControl(existing);
+  if (candidateReadonly !== existingReadonly) return !candidateReadonly;
+  if (isFillableElement(candidate) !== isFillableElement(existing)) return isFillableElement(candidate);
+  return Boolean(candidate.getAttribute("placeholder")) && !existing.getAttribute("placeholder");
 }
 
 function getFieldContexts(element) {
@@ -241,10 +316,10 @@ function tableHeaderText(element) {
 function compactContainerText(element) {
   const formItem = element.closest(FORM_ITEM_SELECTOR);
   if (!formItem) return "";
-  const fields = formItem.querySelectorAll("input, textarea, select");
+  const fields = formItem.querySelectorAll(FIELD_SELECTOR);
   if (fields.length > 1 && element.tagName !== "SELECT") return "";
   const clone = formItem.cloneNode(true);
-  clone.querySelectorAll("input, textarea, select, button, script, style").forEach((item) => item.remove());
+  clone.querySelectorAll(`${FIELD_SELECTOR}, button, script, style`).forEach((item) => item.remove());
   return compactText(clone.innerText || clone.textContent || "").slice(0, 80);
 }
 
@@ -403,6 +478,7 @@ function guardBonus(field, normalizedAll, element, type) {
 
 function applyValue(element, value) {
   const type = (element.getAttribute("type") || "").toLowerCase();
+  if (!isFillableElement(element)) return false;
   if (element.tagName === "SELECT") {
     const option = findBestOption([...element.options], value);
     if (!option) return false;
@@ -420,6 +496,8 @@ function applyValue(element, value) {
     element.checked = desired;
     dispatchInputEvents(element);
     return true;
+  } else if (element.isContentEditable || element.getAttribute("contenteditable") === "true") {
+    element.textContent = normalizeValueForElement(element, value);
   } else {
     setNativeValue(element, normalizeValueForElement(element, value));
   }
@@ -455,6 +533,7 @@ function dispatchInputEvents(element) {
 
 function getElementValue(element) {
   const type = (element.getAttribute("type") || "").toLowerCase();
+  if (element.isContentEditable || element.getAttribute("contenteditable") === "true") return element.textContent || "";
   if (type === "radio" || type === "checkbox") return element.checked ? element.value || "已选" : "";
   return element.value || "";
 }
@@ -524,11 +603,13 @@ function normalizeValueForElement(element, value) {
 
 function isFillableElement(element) {
   if (element.tagName === "SELECT") return element.options.length > 0;
+  if (isReadonlyCustomControl(element)) return false;
   return true;
 }
 
 function elementTypeName(element) {
   const type = (element.getAttribute("type") || "").toLowerCase();
+  if (isReadonlyCustomControl(element)) return "custom-control";
   return element.tagName === "INPUT" && type ? type : element.tagName.toLowerCase();
 }
 

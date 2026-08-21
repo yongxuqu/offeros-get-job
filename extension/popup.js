@@ -271,7 +271,7 @@ async function applySavedOverrides(mappings, profile) {
 
 function renderMappings(mappings, afterFill = false) {
   const visible = mappings.filter((item) => item.field || item.label);
-  const fillableCount = visible.filter((item) => selectedField(item) && profileValue(readProfile(), selectedField(item))).length;
+  const fillableCount = visible.filter((item) => selectedField(item) && profileValue(readProfile(), selectedField(item)) && item.canFill).length;
   mappingCountEl.textContent = `${fillableCount}/${visible.length} 项`;
   resultEl.innerHTML = visible.length
     ? visible.map((item) => mappingRow(item, afterFill)).join("")
@@ -281,24 +281,42 @@ function renderMappings(mappings, afterFill = false) {
 function mappingRow(item, afterFill) {
   const field = selectedField(item);
   const value = profileValue(readProfile(), field);
-  const disabled = !field || !value;
-  const state = item.filled ? "已填充" : field ? item.confidence || "已识别" : "未识别";
+  const canFill = Boolean(item.canFill);
+  const disabled = !field || !value || !canFill;
+  const state = mappingState(item, field, value, afterFill);
   const sensitive = SENSITIVE_FIELDS.has(field) || item.sensitive;
-  const checked = Boolean(item.canAutoSelect || item.manual) && Boolean(field && value) && !sensitive;
+  const checked = Boolean(item.canAutoSelect || item.manual) && Boolean(field && value && canFill) && !sensitive;
+  const hint = mappingHint(item, field, value, sensitive);
   return `
-    <div class="mapping-row ${item.filled ? "filled" : ""} ${disabled ? "disabled" : ""} ${item.manual ? "manual" : ""}">
+    <div class="mapping-row ${item.filled ? "filled" : ""} ${disabled ? "disabled" : ""} ${item.manual ? "manual" : ""} ${!canFill && field && value ? "manual-fill" : ""}">
       <input type="checkbox" data-index="${item.index}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""} />
       <span class="mapping-main">
         <strong title="${escapeHtml(item.label || "未命名字段")}">${escapeHtml(item.label || "未命名字段")}</strong>
         <select class="field-select" data-index="${item.index}">
           ${fieldOptionsHtml(field)}
         </select>
-        <small>${escapeHtml(item.reason || item.autoFieldLabel || item.autoField || "未匹配")}${sensitive ? " · 敏感" : ""}</small>
+        <small>${escapeHtml(item.reason || item.autoFieldLabel || item.autoField || "未匹配")}${hint ? ` · ${escapeHtml(hint)}` : ""}</small>
         <em>${escapeHtml(previewValue(value || item.currentValue || ""))}</em>
       </span>
-      <span class="mapping-state">${afterFill ? (item.filled ? "已填" : "未填") : escapeHtml(state)}</span>
+      <span class="mapping-state ${state.className}">${escapeHtml(state.label)}</span>
     </div>
   `;
+}
+
+function mappingState(item, field, value, afterFill) {
+  if (afterFill) return item.filled ? { label: "已填", className: "ok" } : { label: "未填", className: "muted" };
+  if (!field) return { label: "未识别", className: "muted" };
+  if (!value) return { label: "无数据", className: "muted" };
+  if (!item.canFill) return { label: "需手动", className: "warn" };
+  return { label: item.confidence || "已识别", className: "" };
+}
+
+function mappingHint(item, field, value, sensitive) {
+  if (sensitive) return "敏感字段，需手动勾选";
+  if (!field) return "";
+  if (!value) return "本地简历没有这个字段";
+  if (!item.canFill) return "网页控件需手动选择";
+  return "";
 }
 
 function fieldOptionsHtml(selected) {
@@ -327,7 +345,7 @@ function updateMappingField(mapping, field, profile, fromSaved = false) {
   mapping.fieldLabel = FIELD_LABELS[field] || "";
   mapping.sensitive = SENSITIVE_FIELDS.has(field);
   mapping.value = field ? profileValue(profile, field) : "";
-  mapping.canFill = Boolean(field && mapping.value);
+  mapping.canFill = Boolean(field && mapping.value && mapping.elementFillable !== false);
   mapping.canAutoSelect = false;
   mapping.manual = Boolean(field) && (!fromSaved || field !== mapping.autoField);
   mapping.confidence = field ? (field === mapping.autoField ? mapping.autoConfidence : "手动") : "未匹配";
