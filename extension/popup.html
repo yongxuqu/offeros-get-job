@@ -7,27 +7,49 @@
   <body>
     <main>
       <header>
-        <strong>OfferOS 填表助手</strong>
+        <div>
+          <strong>OfferOS 填表助手</strong>
+          <span id="status-pill">未连接</span>
+        </div>
       </header>
-      <p>从主站同步结构化简历字段，扫描当前网申页后确认填充。</p>
-      <label class="field">
-        <span>主站地址</span>
-        <input id="server-base" placeholder="https://你的 OfferOS 域名" />
-      </label>
-      <label class="field">
-        <span>连接令牌</span>
-        <input id="plugin-token" placeholder="在主站插件页生成" />
-      </label>
-      <div class="actions">
-        <button id="sync">从主站同步</button>
-      </div>
-      <textarea id="profile"></textarea>
-      <div class="actions">
-        <button id="save">保存资料</button>
-        <button id="scan">扫描字段</button>
-        <button id="fill">确认填充</button>
-      </div>
-      <section id="result"></section>
+
+      <section class="panel">
+        <label class="field">
+          <span>主站地址</span>
+          <input id="server-base" placeholder="https://www.offeros.top" />
+        </label>
+        <label class="field">
+          <span>连接令牌</span>
+          <input id="plugin-token" placeholder="在主站插件页生成" />
+        </label>
+        <div class="actions">
+          <button id="sync" class="primary">同步简历</button>
+          <button id="save">保存配置</button>
+        </div>
+        <p id="sync-meta">同步后会把结构化简历字段保存到本地浏览器。</p>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <strong>当前页面</strong>
+            <p>先扫描字段，确认映射后再填充。</p>
+          </div>
+          <span id="mapping-count">0 项</span>
+        </div>
+        <div class="actions">
+          <button id="scan" class="primary">扫描字段</button>
+          <button id="fill">确认填充</button>
+        </div>
+        <section id="result" class="mapping-list">
+          <div class="empty">暂无映射预览</div>
+        </section>
+      </section>
+
+      <details class="panel raw-panel">
+        <summary>本地字段 JSON</summary>
+        <textarea id="profile"></textarea>
+      </details>
     </main>
     <script src="popup.js"></script>
   </body>

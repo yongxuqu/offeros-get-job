@@ -2,51 +2,94 @@
   color-scheme: dark;
   --bg: #080a0f;
   --panel: #11141b;
+  --panel-soft: #181c24;
   --line: rgba(255, 255, 255, 0.12);
   --text: #f4f7fb;
   --muted: #9ca6b8;
+  --faint: #667085;
   --accent: #78f3ff;
+  --ok: #7ef5d1;
+  --danger: #ff7a90;
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
-  width: 360px;
+  width: 420px;
+  max-height: 640px;
   margin: 0;
-  background: var(--bg);
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(120, 243, 255, 0.08), transparent 28%),
+    var(--bg);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
 }
 
 main {
+  display: grid;
+  gap: 10px;
   padding: 14px;
 }
 
-header {
+header > div {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 10px;
 }
 
-header span {
-  color: var(--accent);
+header strong {
+  font-size: 17px;
+}
+
+#status-pill,
+#mapping-count,
+.mapping-state {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--muted);
   font-size: 12px;
+  white-space: nowrap;
+}
+
+#status-pill.ok {
+  border-color: rgba(126, 245, 209, 0.34);
+  color: var(--ok);
+  background: rgba(126, 245, 209, 0.08);
+}
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02)),
+    var(--panel);
+}
+
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.section-head strong {
+  display: block;
+  margin-bottom: 2px;
 }
 
 p {
+  margin: 6px 0 0;
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.55;
-}
-
-textarea {
-  width: 100%;
-  min-height: 150px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-  color: var(--text);
-  padding: 10px;
-  resize: vertical;
-  box-sizing: border-box;
+  line-height: 1.5;
 }
 
 .field {
@@ -57,20 +100,33 @@ textarea {
   font-size: 12px;
 }
 
-input {
+input,
+textarea {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--panel);
+  background: #080b11;
   color: var(--text);
   padding: 9px 10px;
-  box-sizing: border-box;
+}
+
+input:focus,
+textarea:focus {
+  border-color: rgba(120, 243, 255, 0.55);
+  outline: none;
+}
+
+textarea {
+  min-height: 150px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
 }
 
 .actions {
   display: flex;
   gap: 8px;
-  margin: 10px 0;
+  margin-top: 10px;
 }
 
 button {
@@ -79,24 +135,112 @@ button {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.06);
   color: var(--text);
-  padding: 8px;
+  padding: 9px 10px;
+  font-weight: 700;
   cursor: pointer;
+}
+
+button.primary {
+  border-color: rgba(120, 243, 255, 0.58);
+  background: var(--accent);
+  color: #031316;
 }
 
 button:hover {
   border-color: rgba(120, 243, 255, 0.5);
 }
 
-.row {
+.mapping-list {
+  display: grid;
+  gap: 7px;
+  max-height: 260px;
+  overflow: auto;
+  margin-top: 10px;
+  padding-right: 2px;
+}
+
+.mapping-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: flex-start;
+  gap: 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 8px;
-  margin-top: 7px;
+  padding: 9px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.mapping-row.filled {
+  border-color: rgba(126, 245, 209, 0.32);
+  background: rgba(126, 245, 209, 0.06);
+}
+
+.mapping-row.disabled {
+  opacity: 0.62;
+}
+
+.mapping-row input {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.mapping-main {
+  min-width: 0;
+}
+
+.mapping-main strong,
+.mapping-main small,
+.mapping-main em {
+  display: block;
+}
+
+.mapping-main strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mapping-main small {
+  margin-top: 3px;
+  color: var(--muted);
   font-size: 12px;
 }
 
-.row span {
-  display: block;
+.mapping-main em {
+  margin-top: 5px;
+  color: var(--ok);
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.45;
+}
+
+.mapping-state {
+  padding: 3px 7px;
+  font-size: 11px;
+}
+
+.empty {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 12px;
   color: var(--muted);
-  margin-top: 4px;
+  font-size: 12px;
+}
+
+.empty.error {
+  border-color: rgba(255, 122, 144, 0.32);
+  color: #ffd7de;
+}
+
+.raw-panel summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.raw-panel textarea {
+  margin-top: 10px;
 }
