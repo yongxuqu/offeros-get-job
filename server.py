@@ -2686,7 +2686,24 @@ def flatten_resume_fields(resume: dict) -> dict:
         "verifier.identity": verifier.get("identity", ""),
         "verifier.phone": verifier.get("phone", ""),
     }
+    add_indexed_resume_fields(fields, "education", education, [
+        "degree", "schoolName", "studyLocation", "startDate", "endDate", "college", "major", "rank", "gpa", "gpaBase"
+    ])
+    add_indexed_resume_fields(fields, "internships", internships, ["company", "position", "startDate", "endDate", "description"])
+    add_indexed_resume_fields(fields, "projects", projects, ["name", "role", "startDate", "endDate", "description", "link"])
+    add_indexed_resume_fields(fields, "awards", awards, ["type", "date", "description"])
+    add_indexed_resume_fields(fields, "portfolios", portfolios, ["name", "link", "password"])
     return {key: value for key, value in fields.items() if value}
+
+
+def add_indexed_resume_fields(fields: dict, prefix: str, items: list, keys: list) -> None:
+    for index, item in enumerate(items or []):
+        if not isinstance(item, dict):
+            continue
+        for key in keys:
+            value = item.get(key, "")
+            if value:
+                fields[f"{prefix}.{index}.{key}"] = value
 
 
 def multipart_form_data(fields: dict, files: dict) -> tuple[bytes, str]:

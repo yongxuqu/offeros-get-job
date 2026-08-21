@@ -94,7 +94,7 @@ const LABEL_SELECTOR = [
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.3.9" });
+    sendResponse({ ok: true, version: "0.4.0" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -119,6 +119,10 @@ function buildMappings(profile) {
 }
 
 async function fillFields(profile, selectedMappings, selectedIndexes) {
+  if (isMokaPage()) {
+    return fillMokaResume(profile);
+  }
+
   const selected = normalizeSelectedMappings(selectedMappings, selectedIndexes);
   const mappings = [];
   const initialFields = getFields();
@@ -141,6 +145,350 @@ async function fillFields(profile, selectedMappings, selectedIndexes) {
     mappings.push(mapping);
   }
   return mappings;
+}
+
+function isMokaPage() {
+  return /(^|\.)mokahr\.com$/i.test(window.location.hostname);
+}
+
+async function fillMokaResume(profile) {
+  const filled = new WeakSet();
+  const fill = async (element, value) => {
+    if (!element || !String(value || "").trim()) return false;
+    const ok = await applyValue(element, value);
+    if (ok) {
+      filled.add(element);
+      closeOpenCustomDropdowns(element);
+      await wait(80);
+      closeOpenCustomDropdowns(element);
+      await wait(40);
+    }
+    return ok;
+  };
+
+  await fillMokaBasic(profile, fill);
+  await fillMokaEducation(profile, fill);
+  await fillMokaInternships(profile, fill);
+  await fillMokaProjects(profile, fill);
+  await fillMokaAwards(profile, fill);
+  await fillMokaSelfDescription(profile, fill);
+
+  return buildMappings(profile).map((mapping, index) => {
+    const element = getFields()[index];
+    return {
+      ...mapping,
+      filled: Boolean(element && filled.has(element)),
+      currentValue: element ? getElementValue(element) : mapping.currentValue
+    };
+  });
+}
+
+async function fillMokaBasic(profile, fill) {
+  const section = /个人信息|基础信息/;
+  await fill(mokaField(section, /^性别$/), profileValue(profile, "profile.gender"));
+  await fill(mokaField(section, /最高学历|学历/), firstTruthy(profileValue(profile, "education.0.degree"), profileValue(profile, "profile.highestDegree")));
+  await fill(mokaField(section, /^所在地$|现居|当前所在地|当前所处地/), profileValue(profile, "profile.currentLocation"));
+}
+
+async function fillMokaEducation(profile, fill) {
+  const education = profileList(profile, "education", ["degree", "schoolName", "studyLocation", "startDate", "endDate", "college", "major", "rank", "gpa", "gpaBase"])[0] || {};
+  if (!hasAnyValue(education)) return;
+
+  const section = /教育背景|教育经历/;
+  await fillMokaDatePair(section, /教育开始时间|就读开始|入学/, /教育结束时间|就读结束|毕业/, education.startDate, education.endDate, 0, fill);
+  await fill(mokaField(section, /学校名称|学校|院校|就读学校/, 0), education.schoolName);
+  await fill(mokaField(section, /专业名称|专业/, 0), education.major);
+  await fill(mokaField(section, /^学历$|学历层次|最高学历/, 0), education.degree);
+  await fill(mokaField(section, /院系|学院/, 0), education.college);
+  await fill(mokaField(section, /成绩排名|年级排名|排名/, 0), education.rank);
+  await fill(mokaField(section, /^GPA$/i, 0), education.gpa);
+}
+
+async function fillMokaInternships(profile, fill) {
+  const internships = profileList(profile, "internships", ["company", "position", "startDate", "endDate", "description"]).slice(0, 6);
+  if (!internships.length) return;
+
+  const section = /实习经历/;
+  await ensureMokaRows(section, /公司名称|实习公司/, internships.length);
+  for (let index = 0; index < internships.length; index += 1) {
+    const item = internships[index] || {};
+    await fillMokaDatePair(section, /实习开始时间|起止时间/, /实习结束时间|结束时间/, item.startDate, item.endDate, index, fill);
+    await fill(mokaRepeatingField(section, index, 0, 3), item.company);
+    await fill(mokaRepeatingField(section, index, 1, 3), item.position);
+    await fill(mokaRepeatingField(section, index, 2, 3), item.description);
+  }
+}
+
+async function fillMokaProjects(profile, fill) {
+  const projects = profileList(profile, "projects", ["name", "role", "startDate", "endDate", "description", "link"]).slice(0, 6);
+  if (!projects.length) return;
+
+  const section = /项目经验|项目经历/;
+  await ensureMokaRows(section, /项目名称/, projects.length);
+  for (let index = 0; index < projects.length; index += 1) {
+    const item = projects[index] || {};
+    await fillMokaDatePair(section, /项目开始时间|起止时间/, /项目结束时间|结束时间/, item.startDate, item.endDate, index, fill);
+    await fill(mokaRepeatingField(section, index, 0, 4), item.name);
+    await fill(mokaRepeatingField(section, index, 1, 4), item.role);
+    await fill(mokaField(section, /项目链接|项目地址|链接/, index), item.link);
+    await fill(mokaRepeatingField(section, index, 2, 4), item.description);
+    await fill(mokaRepeatingField(section, index, 3, 4), firstTruthy(item.responsibility, item.role));
+  }
+}
+
+async function fillMokaAwards(profile, fill) {
+  const awards = profileList(profile, "awards", ["type", "date", "description"]).slice(0, 8);
+  if (!awards.length) return;
+
+  const section = /获奖经历|获奖信息/;
+  await ensureMokaRows(section, /奖项名称|奖项说明|获奖说明/, awards.length);
+  for (let index = 0; index < awards.length; index += 1) {
+    const item = awards[index] || {};
+    await fillMokaAwardDate(section, item.date, index, fill);
+    await fill(mokaField(section, /获奖类型|奖项类型|奖项类别/, index), item.type);
+    await fill(mokaRepeatingField(section, index, 0, 1), item.description);
+  }
+}
+
+async function fillMokaSelfDescription(profile, fill) {
+  const value = firstTruthy(profileValue(profile, "selfDescription"), profileValue(profile, "profile.selfDescription"));
+  await fill(mokaField(/自我描述|自我评价/, /自我描述|自我评价|个人总结|个人简介/, 0, { textarea: true }), value);
+}
+
+function profileValue(profile, field) {
+  return getProfileValue(profile, field);
+}
+
+function firstTruthy(...values) {
+  return values.find((value) => String(value || "").trim()) || "";
+}
+
+function hasAnyValue(item) {
+  return Boolean(item && Object.values(item).some((value) => String(value || "").trim()));
+}
+
+function profileList(profile, key, fields) {
+  const nested = Array.isArray(profile?.[key]) ? profile[key] : [];
+  const flatIndexes = Object.keys(profile || {}).reduce((indexes, field) => {
+    const match = field.match(new RegExp(`^${key}\\.(\\d+)\\.`));
+    if (match) indexes.add(Number(match[1]));
+    return indexes;
+  }, new Set());
+  const total = Math.max(nested.length, flatIndexes.size ? Math.max(...flatIndexes) + 1 : 0);
+
+  const items = [];
+  for (let index = 0; index < total; index += 1) {
+    const nestedItem = nested[index] || {};
+    const item = {};
+    fields.forEach((field) => {
+      item[field] = firstTruthy(nestedItem[field], getProfileValue(profile, `${key}.${index}.${field}`));
+    });
+    if (hasAnyValue(item)) items.push(item);
+  }
+  if (!items.length) {
+    return parseAggregateProfileList(key, profile?.[key], fields);
+  }
+  return items;
+}
+
+function parseAggregateProfileList(key, value, fields) {
+  const lines = String(value || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.length) return [];
+
+  return lines.map((line) => {
+    if (key === "internships") return parseTimelineLine(line, fields, ["company", "position", "description"]);
+    if (key === "projects") return parseTimelineLine(line, fields, ["name", "role", "description"]);
+    if (key === "awards") return parseAwardLine(line, fields);
+    if (key === "portfolios") return parsePortfolioLine(line, fields);
+    return {};
+  }).filter(hasAnyValue);
+}
+
+function parseTimelineLine(line, fields, names) {
+  const dates = [...line.matchAll(/20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}/g)];
+  if (dates.length < 2) return {};
+  const firstDate = dates[0];
+  const secondDate = dates[1];
+  const before = line.slice(0, firstDate.index).trim().split(/\s+/).filter(Boolean);
+  const after = line.slice((secondDate.index || 0) + secondDate[0].length).trim();
+  const linkMatch = after.match(/https?:\/\/\S+/);
+  const description = linkMatch ? after.replace(linkMatch[0], "").trim() : after;
+  return pickAllowedFields({
+    [names[0]]: before[0] || "",
+    [names[1]]: before.slice(1).join(" "),
+    startDate: firstDate[0],
+    endDate: secondDate[0],
+    [names[2]]: description,
+    link: linkMatch?.[0] || ""
+  }, fields);
+}
+
+function parseAwardLine(line, fields) {
+  const date = line.match(/20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}/);
+  if (!date) return {};
+  return pickAllowedFields({
+    type: line.slice(0, date.index).trim(),
+    date: date[0],
+    description: line.slice((date.index || 0) + date[0].length).trim()
+  }, fields);
+}
+
+function parsePortfolioLine(line, fields) {
+  const linkMatch = line.match(/https?:\/\/\S+/);
+  return pickAllowedFields({
+    name: linkMatch ? line.slice(0, linkMatch.index).trim() : line,
+    link: linkMatch?.[0] || "",
+    password: ""
+  }, fields);
+}
+
+function pickAllowedFields(item, fields) {
+  return fields.reduce((result, field) => {
+    if (item[field]) result[field] = item[field];
+    return result;
+  }, {});
+}
+
+async function fillMokaDatePair(sectionPattern, startPattern, endPattern, startDate, endDate, occurrence, fill) {
+  if (String(startDate || "").trim()) {
+    await fill(mokaDateField(sectionPattern, startPattern, "年", occurrence), startDate);
+    await fill(mokaDateField(sectionPattern, startPattern, "月", occurrence), startDate);
+  }
+  if (String(endDate || "").trim()) {
+    await fill(mokaDateField(sectionPattern, endPattern, "年", occurrence), endDate);
+    await fill(mokaDateField(sectionPattern, endPattern, "月", occurrence), endDate);
+  }
+}
+
+async function fillMokaAwardDate(sectionPattern, date, occurrence, fill) {
+  if (!String(date || "").trim()) return;
+  await fill(mokaDateField(sectionPattern, /获奖时间|获奖日期|颁奖时间/, "年", occurrence), date);
+  await fill(mokaDateField(sectionPattern, /获奖时间|获奖日期|颁奖时间/, "月", occurrence), date);
+}
+
+async function ensureMokaRows(sectionPattern, markerLabelPattern, desiredCount) {
+  for (let attempt = 0; attempt < desiredCount + 3; attempt += 1) {
+    const currentCount = mokaFields(sectionPattern).filter((element) => markerLabelPattern.test(mokaElementLabelText(element))).length;
+    if (currentCount >= desiredCount) return;
+    const button = findMokaAddButton(sectionPattern);
+    if (!button) return;
+    clickElement(button);
+    await wait(260);
+  }
+}
+
+function mokaField(sectionPattern, labelPattern, occurrence = 0, options = {}) {
+  let candidates = mokaFields(sectionPattern).filter((element) => labelPattern.test(mokaElementLabelText(element)));
+  if (options.textarea !== undefined) {
+    candidates = candidates.filter((element) => (element.tagName === "TEXTAREA") === options.textarea);
+  }
+  if (options.preferTextarea) {
+    candidates.sort((a, b) => Number(b.tagName === "TEXTAREA") - Number(a.tagName === "TEXTAREA"));
+  }
+  return candidates[occurrence] || null;
+}
+
+function mokaDateField(sectionPattern, labelPattern, unit, occurrence = 0) {
+  const orderedParts = mokaFields(sectionPattern).filter(mokaDatePartUnit);
+  const patternSource = labelPattern?.source || String(labelPattern || "");
+  if (orderedParts.length) {
+    const isAwardDate = /获奖|奖项|颁奖/.test(patternSource);
+    const isEndDate = /结束|毕业|离职|end/i.test(patternSource);
+    const fieldsPerRow = isAwardDate ? 2 : 4;
+    const base = occurrence * fieldsPerRow + (isEndDate ? 2 : 0) + (unit === "月" ? 1 : 0);
+    if (orderedParts[base]) return orderedParts[base];
+  }
+
+  const candidates = mokaFields(sectionPattern).filter((element) =>
+    mokaDatePartUnit(element) === unit && labelPattern.test(mokaElementLabelText(element))
+  );
+  return candidates[occurrence] || null;
+}
+
+function mokaRepeatingField(sectionPattern, rowIndex, offset, fieldsPerRow) {
+  const candidates = mokaFields(sectionPattern).filter((element) => {
+    const type = (element.getAttribute("type") || "").toLowerCase();
+    return type !== "checkbox" && !mokaDatePartUnit(element);
+  });
+  return candidates[rowIndex * fieldsPerRow + offset] || null;
+}
+
+function mokaFields(sectionPattern) {
+  const anchored = getFields().filter((element) => sectionPattern.test(mokaSectionHeadingTextByAnchor(element)));
+  if (anchored.length) return anchored;
+  return getFields().filter((element) => sectionPattern.test(mokaSectionHeadingText(element)));
+}
+
+function mokaSectionHeadingTextByAnchor(element) {
+  const anchors = mokaSectionAnchors();
+  let matched = "";
+  for (const anchor of anchors) {
+    if (isNodeBefore(anchor.element, element)) {
+      matched = anchor.title;
+    }
+  }
+  return matched;
+}
+
+function mokaSectionAnchors() {
+  return [...document.querySelectorAll("body *")]
+    .filter(isVisibleElement)
+    .map((element) => {
+      const text = labelTextFromNode(element);
+      const title = sectionTitleFromText(text);
+      return { element, title, text };
+    })
+    .filter((item) => item.title && isMokaSectionAnchor(item.element, item.title, item.text))
+    .sort((a, b) => isNodeBefore(a.element, b.element) ? -1 : 1);
+}
+
+function isMokaSectionAnchor(element, title, text) {
+  const normalizedText = compactText(text).replace(/\s*添加\s*$/, "");
+  if (normalizedText !== title) return false;
+  if (/工作经历|教育背景|实习经历|项目经验|项目经历|语言能力|获奖经历|获奖信息/.test(title)) {
+    return Boolean(element.querySelector?.("button, [role='button'], a")) || /添加/.test(element.innerText || element.textContent || "");
+  }
+  return /个人信息|基础信息|求职意向|自我描述/.test(title);
+}
+
+function isNodeBefore(before, after) {
+  return Boolean(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING);
+}
+
+function mokaElementLabelText(element) {
+  return compactText([
+    mokaDatePartLabel(element),
+    mokaFieldLabel(element),
+    componentLabel(element),
+    labelForId(element),
+    element.getAttribute?.("placeholder"),
+    element.getAttribute?.("aria-label"),
+    element.getAttribute?.("name")
+  ].filter(Boolean).join(" "));
+}
+
+function findMokaAddButton(sectionPattern) {
+  const candidates = [...document.querySelectorAll("button, [role='button'], a")]
+    .filter(isVisibleElement)
+    .filter((element) => /添加/.test(compactText(element.innerText || element.textContent || element.getAttribute?.("aria-label") || "")));
+  return candidates.find((element) => sectionPattern.test(mokaSectionHeadingTextForNode(element))) || null;
+}
+
+function mokaSectionHeadingTextForNode(element) {
+  const direct = mokaSectionHeadingText(element);
+  if (direct) return direct;
+
+  for (let node = element; node; node = node.parentElement) {
+    const ownTitle = sectionTitleFromText(labelTextFromNode(node));
+    if (ownTitle) return ownTitle;
+
+    let previous = node.previousElementSibling;
+    for (let hops = 0; previous && hops < 8; hops += 1, previous = previous.previousElementSibling) {
+      const title = sectionTitleFromText(labelTextFromNode(previous));
+      if (title) return title;
+    }
+  }
+  return "";
 }
 
 function normalizeSelectedMappings(selectedMappings, selectedIndexes) {
@@ -643,6 +991,7 @@ async function applyValue(element, value) {
     setNativeValue(element, normalizeValueForElement(element, value));
   }
   dispatchInputEvents(element);
+  if (isMokaPage()) closeOpenCustomDropdowns(element);
   return true;
 }
 
@@ -665,14 +1014,24 @@ async function fillCustomControl(element, value) {
     await wait(110);
     forceCustomInputValue(element, formattedValue);
     dispatchInputEvents(element);
+    closeOpenCustomDropdowns(element);
     return true;
   }
 
   if (isDateLikeElement(element)) {
     setNativeValue(element, formattedValue);
     dispatchInputEvents(element);
+    closeOpenCustomDropdowns(element);
     await wait(80);
     return normalize(getElementValue(element)) === normalize(formattedValue);
+  }
+
+  if (isMokaPage()) {
+    forceCustomInputValue(element, formattedValue);
+    dispatchInputEvents(element);
+    closeOpenCustomDropdowns(element);
+    await wait(80);
+    return Boolean(getElementValue(element));
   }
 
   return false;
@@ -713,6 +1072,29 @@ function clickCustomOption(option) {
   const target = option.querySelector?.("span, div, [class*='label'], [class*='text']") || option;
   clickElement(target);
   if (target !== option) clickElement(option);
+}
+
+function closeOpenCustomDropdowns(element) {
+  const doc = element.ownerDocument || document;
+  dispatchKeyboardEvents(element, "Escape");
+  if (typeof KeyboardEvent === "function") {
+    ["keydown", "keyup"].forEach((type) => {
+      element.dispatchEvent?.(new KeyboardEvent(type, { key: "Escape", bubbles: true, cancelable: true, composed: true }));
+      doc.dispatchEvent(new KeyboardEvent(type, { key: "Escape", bubbles: true, cancelable: true }));
+      window.dispatchEvent(new KeyboardEvent(type, { key: "Escape", bubbles: true, cancelable: true }));
+    });
+  }
+  if (typeof FocusEvent === "function") {
+    element.dispatchEvent?.(new FocusEvent("focusout", { bubbles: true, composed: true }));
+  }
+  element.blur?.();
+  doc.activeElement?.blur?.();
+  const target = doc.body || doc.documentElement;
+  if (!target) return;
+  const closeTargets = uniqueElements([element, target, doc.documentElement, doc, window]);
+  ["pointerdown", "mousedown", "touchstart", "pointerup", "mouseup", "click"].forEach((type) => {
+    closeTargets.forEach((closeTarget) => dispatchMouseLikeEvent(closeTarget, type));
+  });
 }
 
 async function selectFrameworkOption(element, option, value) {
