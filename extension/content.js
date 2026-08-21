@@ -94,7 +94,7 @@ const LABEL_SELECTOR = [
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.3.6" });
+    sendResponse({ ok: true, version: "0.3.7" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -135,7 +135,7 @@ async function fillFields(profile, selectedMappings, selectedIndexes) {
     const shouldFill = selected.has(index) && mapping.field && mapping.value && mapping.canFill;
     if (shouldFill) {
       mapping.filled = await applyValue(element, mapping.value);
-      await wait(160);
+      await wait(70);
       mapping.currentValue = getElementValue(getFields()[index] || element);
     }
     mappings.push(mapping);
@@ -551,19 +551,18 @@ async function fillCustomControl(element, value) {
   const rootDocument = element.ownerDocument || document;
 
   await openCustomControl(element, [formattedValue, value], rootDocument);
-  let option = await waitForCustomOption([formattedValue, value], rootDocument, 1800);
+  let option = await waitForCustomOption([formattedValue, value], rootDocument, 700);
   if (!option) {
     setNativeValue(element, formattedValue);
     dispatchInputEvents(element);
     dispatchKeyboardEvents(element, "ArrowDown");
-    await wait(120);
-    option = await waitForCustomOption([formattedValue, value], rootDocument, 1200);
+    await wait(60);
+    option = await waitForCustomOption([formattedValue, value], rootDocument, 500);
   }
   if (option) {
-    const frameworkSelected = await selectFrameworkOption(element, option, formattedValue);
-    if (!frameworkSelected) clickCustomOption(option);
+    clickCustomOption(option);
     dispatchKeyboardEvents(element, "Enter");
-    await wait(240);
+    await wait(110);
     forceCustomInputValue(element, formattedValue);
     dispatchInputEvents(element);
     return true;
@@ -589,7 +588,7 @@ async function openCustomControl(element, values, rootDocument) {
   ]);
   for (const target of targets) {
     clickElement(target);
-    await wait(120);
+    await wait(70);
     if (values.some((value) => findBestCustomOption(value, rootDocument))) return;
   }
 }
