@@ -13,10 +13,13 @@ class FakeElement {
     this.customControl = Boolean(config.customControl);
     this.offsetParent = {};
     this.sectionTitle = config.sectionTitle || "";
-    this.options = (config.options || []).map((option) => ({
-      value: option.value,
-      textContent: option.label || option.value
-    }));
+    this.options = (config.options || []).map((option) => {
+      const value = typeof option === "string" ? option : option.value;
+      return {
+        value,
+        textContent: typeof option === "string" ? option : option.label || option.value
+      };
+    });
   }
 
   getAttribute(name) {
@@ -60,7 +63,7 @@ class FakeElement {
   }
 }
 
-function loadContentScript(fields, labels) {
+function loadContentScript(fields, labels, hostname = "example.com") {
   const customOptions = ["前5%", "前10%", "前20%"].map((text) => ({
     innerText: text,
     textContent: text,
@@ -81,7 +84,7 @@ function loadContentScript(fields, labels) {
     Event: class {},
     MouseEvent: class {},
     setTimeout,
-    window: {},
+    window: { location: { hostname } },
     document: {
       querySelectorAll: (selector) => {
         if (selector.includes("el-select-dropdown__item") || selector.includes("[role='option']")) return customOptions;
@@ -109,6 +112,7 @@ function input(id, label, attrs = {}, sectionTitle = "") {
       tagName: attrs.tagName || "input",
       readOnly: attrs.readOnly,
       customControl: attrs.customControl,
+      options: attrs.options,
       sectionTitle
     }),
     label
@@ -121,6 +125,8 @@ const cases = [
   input("givenName", "名"),
   input("school", "学校名称", {}, "教育经历"),
   input("rankSelect", "年级排名", { readOnly: true, customControl: true }, "教育经历"),
+  input("language", "语言类型", { tagName: "select", options: ["英语", "中文"] }, "语言能力"),
+  input("languageCertificate", "语言证书", {}, "语言能力"),
   input("company", "公司名称", {}, "实习经历"),
   input("position", "职位", {}, "实习经历"),
   input("projectStart", "开始时间", { type: "date" }, "项目经历"),
@@ -141,6 +147,8 @@ const profile = {
   "profile.idNumber": "110101199901010000",
   "education.0.schoolName": "某某大学",
   "education.0.rank": "前10%",
+  "languageAbilities.0.language": "英语",
+  "languageAbilities.0.certificate": "CET-6",
   "internships.0.company": "星云科技",
   "internships.0.position": "产品运营实习生",
   "projects.0.startDate": "2025-01-01",
@@ -159,6 +167,8 @@ const expectations = {
   givenName: "profile.givenName",
   school: "education.0.schoolName",
   rankSelect: "education.0.rank",
+  language: "languageAbilities.0.language",
+  languageCertificate: "languageAbilities.0.certificate",
   company: "internships.0.company",
   position: "internships.0.position",
   projectStart: "projects.0.startDate",
@@ -196,6 +206,8 @@ const fillExpectations = {
   givenName: "同学",
   school: "某某大学",
   rankSelect: "前10%",
+  language: "英语",
+  languageCertificate: "CET-6",
   company: "星云科技",
   position: "产品运营实习生",
   projectStart: "2025-01-01",
@@ -215,6 +227,24 @@ for (const [id, expected] of Object.entries(fillExpectations)) {
 if (!byId.rankSelect?.canFill || !byId.rankSelect?.canAutoSelect) {
   failed = true;
   console.error("自定义只读下拉应该默认自动填充");
+}
+
+const mokaVipScript = loadContentScript([], {}, "xmbank.mokahr.vip");
+if (!mokaVipScript.isMokaPage()) {
+  failed = true;
+  console.error("mokahr.vip 应该识别为 Moka 页面");
+}
+
+const zhiyeScript = loadContentScript([], {}, "transsion.zhiye.com");
+if (!zhiyeScript.isStructuredRecruitmentPage()) {
+  failed = true;
+  console.error("zhiye.com 应该识别为结构化招聘页面");
+}
+
+const hotjobScript = loadContentScript([], {}, "wecruit.hotjob.cn");
+if (!hotjobScript.isStructuredRecruitmentPage()) {
+  failed = true;
+  console.error("hotjob.cn 应该识别为结构化招聘页面");
 }
 
 if (failed) process.exit(1);

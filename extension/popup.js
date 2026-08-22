@@ -45,6 +45,12 @@ const FIELD_OPTIONS = [
   ["portfolios.0.link", "第一项作品链接"],
   ["portfolios.0.password", "第一项作品提取码"],
   ["portfolios", "作品主页"],
+  ["languageAbilities.0.language", "第一项语言类型"],
+  ["languageAbilities.0.proficiency", "第一项语言水平"],
+  ["languageAbilities.0.listeningSpeaking", "第一项听说能力"],
+  ["languageAbilities.0.readingWriting", "第一项读写能力"],
+  ["languageAbilities.0.certificate", "第一项语言证书"],
+  ["languageAbilities", "语言能力"],
   ["selfDescription", "自我描述"],
   ["verifier.name", "资料证明人"],
   ["verifier.identity", "证明人身份"],
@@ -83,7 +89,13 @@ const defaultProfile = {
   "portfolios.0.name": "产品作品集",
   "portfolios.0.link": "https://example.com/portfolio",
   "portfolios.0.password": "2026",
-  "portfolios": "产品作品集：https://example.com/portfolio 提取码：2026"
+  "portfolios": "产品作品集：https://example.com/portfolio 提取码：2026",
+  "languageAbilities.0.language": "英语",
+  "languageAbilities.0.proficiency": "熟练",
+  "languageAbilities.0.listeningSpeaking": "熟练",
+  "languageAbilities.0.readingWriting": "熟练",
+  "languageAbilities.0.certificate": "CET-6",
+  "languageAbilities": "英语 熟练 CET-6"
 };
 
 const profileEl = document.querySelector("#profile");
@@ -361,7 +373,7 @@ function filledOrStructuredCount(mappings, profile) {
 }
 
 function isMokaHost(host = currentHost) {
-  return /(^|\.)mokahr\.com$/i.test(host || "");
+  return /(^|\.)mokahr\.(com|vip)$/i.test(host || "");
 }
 
 function fillBusyMessage(host) {

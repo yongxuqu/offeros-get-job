@@ -3122,7 +3122,7 @@ const App = {
   },
 
   renderPlugin() {
-    const extensionVersion = "0.5.10";
+    const extensionVersion = "0.6.0";
     const downloadUrl = `/downloads/offeros-extension-v${extensionVersion}.zip`;
     return `
       <section class="section-title">

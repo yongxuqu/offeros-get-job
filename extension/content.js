@@ -70,6 +70,14 @@ const CUSTOM_CONTROL_SELECTOR = [
   ".ant-select",
   ".ant-picker",
   ".ant-cascader-picker",
+  ".ivu-select",
+  ".ivu-date-picker",
+  ".semi-select",
+  ".semi-datepicker",
+  ".arco-select",
+  ".arco-picker",
+  ".t-select",
+  ".t-date-picker",
   "[role='combobox']"
 ].join(",");
 const CUSTOM_OPTION_SELECTOR = [
@@ -82,13 +90,18 @@ const CUSTOM_OPTION_SELECTOR = [
   ".ant-select-item-option:not(.ant-select-item-option-disabled)",
   ".ant-select-dropdown .ant-select-item:not(.ant-select-item-option-disabled)",
   ".ant-cascader-menu-item:not(.ant-cascader-menu-item-disabled)",
+  ".rc-select-item-option:not(.rc-select-item-option-disabled)",
+  ".ivu-select-item:not(.ivu-select-item-disabled)",
+  ".semi-select-option:not(.semi-select-option-disabled)",
+  ".arco-select-option:not(.arco-select-option-disabled)",
+  ".t-select-option:not(.t-is-disabled)",
   "[class*='Menu-container']",
   "[class*='menu-container']",
   "[role='option']:not([aria-disabled='true'])",
   "[class*='dropdown'] li",
   "[class*='select'] [class*='option']"
 ].join(",");
-const FORM_ITEM_SELECTOR = ".ant-form-item, .ant-row, .el-form-item, .el-form-item--default, .form-item, .form-group, .field, .moka-form-item, .moka-form-row, .form-row, li, td";
+const FORM_ITEM_SELECTOR = ".ant-form-item, .ant-row, .el-form-item, .el-form-item--default, .form-item, .form-field, .field-item, .form-group, .field, .moka-form-item, .moka-form-row, .form-row, li, td";
 const LABEL_SELECTOR = [
   ".ant-form-item-label",
   ".el-form-item__label",
@@ -100,10 +113,11 @@ const LABEL_SELECTOR = [
   "label"
 ].join(",");
 let mokaAnchorCache = null;
+let genericAnchorCache = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.5.10" });
+    sendResponse({ ok: true, version: "0.6.0" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -236,15 +250,42 @@ async function fillFields(profile, selectedMappings, selectedIndexes) {
     }
     mappings.push(mapping);
   }
+  if (isStructuredRecruitmentPage()) {
+    await fillGenericStructuredResume(profile);
+    return getFields().map((element, index) => ({
+      ...describeField(element, index, profile),
+      filled: Boolean(getElementValue(element))
+    }));
+  }
   return mappings;
 }
 
 function isMokaPage() {
-  return /(^|\.)mokahr\.com$/i.test(window.location?.hostname || "");
+  return /(^|\.)mokahr\.(com|vip)$/i.test(window.location?.hostname || "");
 }
 
 function isFeishuJobsPage() {
   return /(^|\.)jobs\.feishu\.cn$/i.test(window.location?.hostname || "");
+}
+
+function isZhiyePage() {
+  return /(^|\.)zhiye\.com$/i.test(window.location?.hostname || "");
+}
+
+function isHotjobPage() {
+  return /(^|\.)hotjob\.cn$/i.test(window.location?.hostname || "");
+}
+
+function isLiepinPage() {
+  return /(^|\.)liepin\.com$/i.test(window.location?.hostname || "");
+}
+
+function isNowcoderPage() {
+  return /(^|\.)(nowcoder\.com|niuke\.com)$/i.test(window.location?.hostname || "");
+}
+
+function isStructuredRecruitmentPage() {
+  return isZhiyePage() || isHotjobPage() || isLiepinPage() || isNowcoderPage();
 }
 
 async function fillMokaResume(profile) {
@@ -463,6 +504,123 @@ async function fillMokaSelfDescription(profile, fill) {
   await fill(mokaField(/自我描述|自我评价/, /自我描述|自我评价|个人总结|个人简介/, 0, { textarea: true }), value);
 }
 
+async function fillGenericStructuredResume(profile) {
+  genericAnchorCache = null;
+  const fill = async (element, value) => {
+    if (!element || !String(value || "").trim()) return false;
+    const ok = await applyValue(element, value);
+    if (ok) await wait(45);
+    return ok;
+  };
+
+  await checkGenericNoWorkExperience();
+  await fillGenericEducation(profile, fill);
+  await fillGenericInternships(profile, fill);
+  await fillGenericProjects(profile, fill);
+  await fillGenericAwards(profile, fill);
+  await fillGenericLanguages(profile, fill);
+  await fill(genericField(/自我描述|自我评价|个人评价|个人简介/, /自我描述|自我评价|个人总结|个人简介|个人评价/, 0, { preferTextarea: true }), firstTruthy(profileValue(profile, "selfDescription"), profileValue(profile, "profile.selfDescription")));
+  genericAnchorCache = null;
+}
+
+async function fillGenericEducation(profile, fill) {
+  const education = profileList(profile, "education", ["degree", "schoolName", "studyLocation", "startDate", "endDate", "college", "major", "rank", "gpa", "gpaBase"])[0] || {};
+  if (!hasAnyValue(education)) return;
+
+  const section = /教育背景|教育经历|教育信息/;
+  const [dateRow] = captureGenericDateRows(section, 1);
+  await fill(genericField(section, /学历|学位|最高学历|学历层次/, 0), education.degree);
+  await fillGenericDateRow(dateRow, education.startDate, education.endDate, fill);
+  await fill(genericField(section, /学校名称|学校|院校|毕业院校|就读学校/, 0), education.schoolName);
+  await fill(genericField(section, /就读地|就读城市|学校所在地/, 0), education.studyLocation);
+  await fill(genericField(section, /院系|学院|院系名称/, 0), education.college);
+  await fill(genericField(section, /专业名称|所学专业|专业/, 0), education.major);
+  await fill(genericField(section, /成绩排名|专业排名|年级排名|排名/, 0), education.rank);
+  await fill(genericField(section, /^GPA$|平均绩点|绩点/, 0), education.gpa);
+  await fill(genericField(section, /GPA Base|绩点满分|满绩|满分/, 0), education.gpaBase);
+}
+
+async function fillGenericInternships(profile, fill) {
+  const internships = profileList(profile, "internships", ["company", "position", "startDate", "endDate", "description"]).slice(0, 8);
+  if (!internships.length) return;
+
+  const section = /实习经历|实习经验/;
+  await ensureGenericRows(section, /公司名称|实习公司|所在公司/, internships.length);
+  const dateRows = captureGenericDateRows(section, internships.length);
+  for (let index = 0; index < internships.length; index += 1) {
+    const item = internships[index] || {};
+    await fillGenericDateRow(dateRows[index], item.startDate, item.endDate, fill);
+    await fill(genericField(section, /公司名称|实习公司|所在公司|单位名称/, index), item.company);
+    await fill(genericField(section, /职位名称|岗位名称|实习职位|任职岗位|职位|岗位/, index), item.position);
+    await fill(genericField(section, /工作职责|职责描述|工作内容|实习描述|经历描述|描述/, index, { preferTextarea: true }), item.description);
+  }
+}
+
+async function fillGenericProjects(profile, fill) {
+  const projects = profileList(profile, "projects", ["name", "role", "startDate", "endDate", "link", "description", "responsibility"]).slice(0, 8);
+  if (!projects.length) return;
+
+  const section = /项目经历|项目经验|项目实践/;
+  await ensureGenericRows(section, /项目名称|项目名/, projects.length);
+  const dateRows = captureGenericDateRows(section, projects.length);
+  for (let index = 0; index < projects.length; index += 1) {
+    const item = projects[index] || {};
+    await fillGenericDateRow(dateRows[index], item.startDate, item.endDate, fill);
+    await fill(genericField(section, /项目名称|项目名/, index), item.name);
+    await fill(genericField(section, /项目角色|担任角色|负责角色|角色|职位|职责/, index), item.role);
+    await fill(genericField(section, /项目链接|项目地址|项目网址|链接|URL/i, index), item.link);
+    await fill(genericField(section, /项目描述|项目介绍|项目内容|描述|项目职责/, index, { preferTextarea: true }), firstTruthy(item.description, item.responsibility));
+  }
+}
+
+async function fillGenericAwards(profile, fill) {
+  const awards = profileList(profile, "awards", ["type", "date", "description"]).slice(0, 10);
+  if (!awards.length) return;
+
+  const section = /获奖经历|获奖信息|荣誉奖励|奖项/;
+  await ensureGenericRows(section, /奖项名称|奖项说明|获奖说明|奖励名称/, awards.length);
+  const dateRows = captureGenericDateRows(section, awards.length, true);
+  for (let index = 0; index < awards.length; index += 1) {
+    const item = awards[index] || {};
+    await fillGenericDateRow(dateRows[index], item.date, "", fill);
+    await fill(genericField(section, /获奖类型|奖项类型|奖项类别|奖励类型/, index), item.type);
+    await fill(genericField(section, /奖项名称|奖项说明|获奖说明|获奖描述|奖励名称|描述/, index, { preferTextarea: true }), item.description);
+  }
+}
+
+async function fillGenericLanguages(profile, fill) {
+  const languages = profileList(profile, "languageAbilities", ["language", "proficiency", "listeningSpeaking", "readingWriting", "certificate"]).slice(0, 6);
+  if (!languages.length) return;
+
+  const section = /语言能力|外语能力|语言水平/;
+  await ensureGenericRows(section, /语言类型|语言名称|外语语种|语种/, languages.length);
+  for (let index = 0; index < languages.length; index += 1) {
+    const item = languages[index] || {};
+    await fill(genericField(section, /语言类型|语言名称|外语语种|语种/, index), item.language);
+    await fill(genericField(section, /掌握程度|语言水平|熟练程度/, index), item.proficiency);
+    await fill(genericField(section, /听说能力|听说|口语水平/, index), item.listeningSpeaking);
+    await fill(genericField(section, /读写能力|读写|阅读写作/, index), item.readingWriting);
+    await fill(genericField(section, /证书或成绩|语言证书|考试成绩|成绩|证书/, index), item.certificate);
+  }
+}
+
+async function checkGenericNoWorkExperience() {
+  const label = [...document.querySelectorAll("body *")]
+    .filter(isVisibleElement)
+    .filter((element) => /^(没有工作经历|无工作经历|暂无工作经历)$/.test(compactText(element.innerText || element.textContent || "")))
+    .sort((a, b) => elementDepth(b) - elementDepth(a))[0];
+  let root = label;
+  let checkbox = null;
+  for (let depth = 0; root && depth < 6 && !checkbox; depth += 1, root = root.parentElement) {
+    checkbox = root.matches?.('input[type="checkbox"], [role="checkbox"]')
+      ? root
+      : root.querySelector?.('input[type="checkbox"], [role="checkbox"]');
+  }
+  if (!checkbox || checkbox.checked || checkbox.getAttribute("aria-checked") === "true") return;
+  clickElement(checkbox);
+  await wait(120);
+}
+
 function profileValue(profile, field) {
   return getProfileValue(profile, field);
 }
@@ -617,6 +775,154 @@ async function ensureMokaRows(sectionPattern, markerLabelPattern, desiredCount) 
     clickElement(button);
     await wait(160);
   }
+}
+
+function genericField(sectionPattern, labelPattern, occurrence = 0, options = {}) {
+  let candidates = genericFields(sectionPattern).filter((element) => labelPattern.test(genericElementLabelText(element)));
+  if (options.textarea !== undefined) {
+    candidates = candidates.filter((element) => (element.tagName === "TEXTAREA") === options.textarea);
+  }
+  if (options.preferTextarea) {
+    candidates.sort((a, b) => Number(b.tagName === "TEXTAREA") - Number(a.tagName === "TEXTAREA"));
+  }
+  return candidates[occurrence] || null;
+}
+
+function genericFields(sectionPattern) {
+  const anchored = getFields().filter((element) => sectionPattern.test(genericSectionHeadingTextByAnchor(element)));
+  if (anchored.length) return anchored;
+  return getFields().filter((element) => sectionPattern.test(genericSectionHeadingText(element)));
+}
+
+function genericElementLabelText(element) {
+  return compactText([
+    mokaDatePartLabel(element),
+    genericFieldLabel(element),
+    componentLabel(element),
+    labelForId(element),
+    tableHeaderText(element),
+    element.getAttribute?.("placeholder"),
+    element.getAttribute?.("aria-label"),
+    element.getAttribute?.("name"),
+    element.getAttribute?.("id")
+  ].filter(Boolean).join(" "));
+}
+
+function genericFieldLabel(element) {
+  return nearbyLabelBeforeElement(element);
+}
+
+function genericSectionHeadingText(element) {
+  return sectionHeadingText(element) || mokaSectionHeadingText(element);
+}
+
+function genericSectionHeadingTextByAnchor(element) {
+  const anchors = genericSectionAnchors();
+  let matched = "";
+  for (const anchor of anchors) {
+    if (isNodeBefore(anchor.element, element)) matched = anchor.title;
+  }
+  return matched;
+}
+
+function genericSectionAnchors() {
+  if (genericAnchorCache) return genericAnchorCache;
+  genericAnchorCache = [...document.querySelectorAll("body *")]
+    .filter(isVisibleElement)
+    .map((element) => {
+      const text = labelTextFromNode(element);
+      const title = sectionTitleFromText(text);
+      return { element, title, text };
+    })
+    .filter((item) => item.title && isGenericSectionAnchor(item.element, item.title, item.text))
+    .sort((a, b) => isNodeBefore(a.element, b.element) ? -1 : 1);
+  return genericAnchorCache;
+}
+
+function isGenericSectionAnchor(element, title, text) {
+  const normalizedText = compactText(text).replace(/\s*(添加|新增|继续添加).*$/, "");
+  if (normalizedText !== title) return false;
+  if (/教育背景|教育经历|教育信息|工作经历|实习经历|实习经验|项目经验|项目经历|项目实践|语言能力|外语能力|获奖经历|获奖信息|荣誉奖励/.test(title)) {
+    return true;
+  }
+  return /个人信息|基础信息|求职意向|自我描述|自我评价|个人评价|个人简介/.test(title);
+}
+
+function captureGenericDateRows(sectionPattern, count, awardOnly = false) {
+  const dateFields = genericFields(sectionPattern).filter(isGenericDateField);
+  const parts = dateFields.filter(mokaDatePartUnit);
+  if (parts.length) {
+    const fieldsPerRow = awardOnly ? 2 : 4;
+    return Array.from({ length: count }, (_, index) => {
+      const base = index * fieldsPerRow;
+      return awardOnly
+        ? { date: [parts[base], parts[base + 1]].filter(Boolean) }
+        : {
+            start: [parts[base], parts[base + 1]].filter(Boolean),
+            end: [parts[base + 2], parts[base + 3]].filter(Boolean)
+          };
+    });
+  }
+
+  const fieldsPerRow = awardOnly ? 1 : 2;
+  return Array.from({ length: count }, (_, index) => {
+    const base = index * fieldsPerRow;
+    return awardOnly
+      ? { date: [dateFields[base]].filter(Boolean) }
+      : { start: [dateFields[base]].filter(Boolean), end: [dateFields[base + 1]].filter(Boolean) };
+  });
+}
+
+async function fillGenericDateRow(row, startDate, endDate, fill) {
+  if (!row) return;
+  const fillTargets = async (targets, value) => {
+    for (const target of targets || []) {
+      await fill(target, value);
+    }
+  };
+  if (row.date) {
+    await fillTargets(row.date, startDate);
+    return;
+  }
+  await fillTargets(row.start, startDate);
+  await fillTargets(row.end, endDate);
+}
+
+function isGenericDateField(element) {
+  const type = (element.getAttribute("type") || "").toLowerCase();
+  if (["date", "month"].includes(type)) return true;
+  if (mokaDatePartUnit(element)) return true;
+  return /日期|时间|年月|入学|毕业|开始|结束|起始|离职|获奖|YYYY|yyyy/i.test(genericElementLabelText(element));
+}
+
+async function ensureGenericRows(sectionPattern, markerLabelPattern, desiredCount) {
+  for (let attempt = 0; attempt < desiredCount + 3; attempt += 1) {
+    const currentCount = genericFields(sectionPattern).filter((element) => markerLabelPattern.test(genericElementLabelText(element))).length;
+    if (currentCount >= desiredCount) return;
+    const button = findGenericAddButton(sectionPattern);
+    if (!button) return;
+    clickElement(button);
+    await wait(220);
+  }
+}
+
+function findGenericAddButton(sectionPattern) {
+  const candidates = [...document.querySelectorAll("button, [role='button'], a")]
+    .filter(isVisibleElement)
+    .filter((element) => /添加|新增|继续添加/.test(compactText(element.innerText || element.textContent || element.getAttribute?.("aria-label") || "")));
+  return candidates.find((element) => sectionPattern.test(genericSectionHeadingTextForNode(element))) || null;
+}
+
+function genericSectionHeadingTextForNode(element) {
+  const direct = genericSectionHeadingText(element);
+  if (direct) return direct;
+
+  const anchors = genericSectionAnchors();
+  let matched = "";
+  for (const anchor of anchors) {
+    if (isNodeBefore(anchor.element, element)) matched = anchor.title;
+  }
+  return matched;
 }
 
 function mokaField(sectionPattern, labelPattern, occurrence = 0, options = {}) {
@@ -1248,7 +1554,7 @@ function mokaSectionHeadingText(element) {
 }
 
 function sectionTitleFromText(text) {
-  const match = compactText(text).match(/(基础信息|个人信息|求职意向|工作经历|教育背景|实习经历|项目经验|项目经历|语言能力|自我描述|获奖经历|获奖信息)/);
+  const match = compactText(text).match(/(基础信息|个人信息|求职意向|工作经历|工作经验|教育背景|教育经历|教育信息|实习经历|实习经验|项目经验|项目经历|项目实践|语言能力|外语能力|语言水平|自我描述|自我评价|个人评价|个人简介|获奖经历|获奖信息|荣誉奖励)/);
   return match?.[1] || "";
 }
 
