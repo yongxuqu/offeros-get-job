@@ -1,8 +1,8 @@
 # OfferOS
 
-OfferOS is an open-source job-search operating system for early-career candidates. It combines resume data, job discovery, application tracking, AI-assisted resume parsing, voice interview reports, an admin job console, and a browser extension for form filling.
+OfferOS is a source-available job-search operating system for early-career candidates. It combines resume data, job discovery, application tracking, AI-assisted resume parsing, voice interview reports, an admin job console, and a browser extension for form filling.
 
-This repository contains the open-source application code only. Production secrets, user data, uploaded resumes, SQLite databases, and real job-data snapshots are intentionally not included.
+This repository contains the publicly available application code only. Production secrets, user data, uploaded resumes, SQLite databases, and real job-data snapshots are intentionally not included.
 
 ## Hosted Version
 
@@ -155,4 +155,12 @@ Before deploying, make sure real secrets are stored only in server environment v
 
 ## License
 
-See [LICENSE](LICENSE).
+OfferOS is source-available under the [OfferOS Non-Commercial License 1.0](LICENSE).
+Personal learning, academic research, evaluation, modification, and other
+non-commercial uses are permitted. Commercial use, including SaaS, paid
+services, enterprise operations, commercial distribution, and commercial
+derivative products, requires prior written permission and a separate
+commercial license from OfferOS.
+
+Because the license restricts commercial use, this project is not "open source"
+under the OSI Open Source Definition.

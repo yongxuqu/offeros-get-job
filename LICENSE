@@ -1,21 +1,57 @@
-MIT License
+OfferOS Non-Commercial License 1.0
 
-Copyright (c) 2026 OfferOS contributors
+Copyright (c) 2026 OfferOS
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Permission is granted, free of charge, to any individual or organization that
+obtains a copy of this software and its associated documentation (the
+"Software") to view, use, copy, modify, and redistribute the Software solely
+for non-commercial purposes, subject to the terms below.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Permitted use
+
+The Software may be used for personal learning, academic research, evaluation,
+and other activities that are not primarily intended for or directed toward
+commercial advantage or monetary compensation.
+
+2. Commercial use is prohibited without a separate license
+
+You must obtain prior written permission and a separate commercial license from
+OfferOS before using the Software for any commercial purpose. Commercial use
+includes, without limitation:
+
+- offering the Software or a modified version as a paid product or service;
+- providing the Software to the public as SaaS, PaaS, hosted software, or a
+  similar online service, whether directly paid or monetized indirectly;
+- using the Software in the operation of a for-profit business or to provide
+  services to customers;
+- selling, sublicensing, or commercially distributing the Software or a
+  modified version; and
+- developing a commercial product or service substantially based on the
+  Software.
+
+3. Attribution and notices
+
+All copies or substantial portions of the Software must retain this license,
+the copyright notice above, and clear attribution to OfferOS. Modified versions
+must be clearly identified as modified and must not imply endorsement by or
+official affiliation with OfferOS.
+
+4. No trademark license
+
+This license does not grant permission to use the OfferOS name, logos, or other
+trademarks except as necessary for reasonable attribution.
+
+5. Commercial licensing
+
+For commercial licensing, contact the OfferOS project owner through the
+official project repository.
+
+6. Disclaimer
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM,
+OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
