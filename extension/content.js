@@ -103,7 +103,7 @@ let mokaAnchorCache = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.5.8" });
+    sendResponse({ ok: true, version: "0.5.10" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -296,6 +296,9 @@ async function fillFeishuResume(profile) {
   await fill(educationFields[1], education.major);
   await fillFeishuPeriod(feishuPeriodContainers(/教育经历/)[0], education.startDate, education.endDate);
 
+  const workExperiences = profileList(profile, "workExperiences", ["company", "position", "startDate", "endDate", "description"]);
+  if (!workExperiences.length) await checkFeishuNoWorkExperience();
+
   const internships = profileList(profile, "internships", ["company", "position", "startDate", "endDate", "description"]).slice(0, 6);
   await ensureFeishuRows(/实习经历/, 3, internships.length);
   const internshipFields = feishuDataFields(/实习经历/);
@@ -303,10 +306,10 @@ async function fillFeishuResume(profile) {
   for (let index = 0; index < internships.length; index += 1) {
     const item = internships[index];
     const offset = index * 3;
-    await fill(internshipFields[offset], item.company);
-    await fill(internshipFields[offset + 1], item.position);
+    await fill(feishuCyField(`internship[${index}].companyInput`) || internshipFields[offset], item.company);
+    await fill(feishuCyField(`internship[${index}].titleInput`) || internshipFields[offset + 1], item.position);
     await fillFeishuPeriod(internshipPeriods[index], item.startDate, item.endDate);
-    await fill(internshipFields[offset + 2], item.description);
+    await fill(feishuCyField(`internship[${index}].descInput`) || internshipFields[offset + 2], item.description);
   }
 
   const projects = profileList(profile, "projects", ["name", "role", "startDate", "endDate", "link", "description"]).slice(0, 6);
@@ -316,11 +319,11 @@ async function fillFeishuResume(profile) {
   for (let index = 0; index < projects.length; index += 1) {
     const item = projects[index];
     const offset = index * 4;
-    await fill(projectFields[offset], item.name);
-    await fill(projectFields[offset + 1], item.role);
+    await fill(feishuCyField(`project[${index}].nameInput`) || projectFields[offset], item.name);
+    await fill(feishuCyField(`project[${index}].roleInput`) || projectFields[offset + 1], item.role);
     await fillFeishuPeriod(projectPeriods[index], item.startDate, item.endDate);
-    await fill(projectFields[offset + 2], item.link);
-    await fill(projectFields[offset + 3], item.description);
+    await fill(feishuCyField(`project[${index}].linkInput`) || projectFields[offset + 2], item.link);
+    await fill(feishuCyField(`project[${index}].descInput`) || projectFields[offset + 3], item.description);
   }
 
   const portfolios = profileList(profile, "portfolios", ["name", "link", "password"]).slice(0, 6);
@@ -691,6 +694,27 @@ function feishuPeriodContainers(sectionPattern) {
   return containers.filter((element) => String(element.getAttribute("data-cy") || "").startsWith(prefix));
 }
 
+function feishuCyField(dataCy) {
+  return document.querySelector(`[data-cy="${CSS.escape(dataCy)}"]`);
+}
+
+async function checkFeishuNoWorkExperience() {
+  const label = [...document.querySelectorAll("body *")]
+    .filter(isVisibleElement)
+    .filter((element) => compactText(element.innerText || element.textContent || "") === "没有工作经历")
+    .sort((a, b) => elementDepth(b) - elementDepth(a))[0];
+  let root = label;
+  let checkbox = null;
+  for (let depth = 0; root && depth < 5 && !checkbox; depth += 1, root = root.parentElement) {
+    checkbox = root.matches?.('input[type="checkbox"], [role="checkbox"]')
+      ? root
+      : root.querySelector?.('input[type="checkbox"], [role="checkbox"]');
+  }
+  if (!checkbox || checkbox.checked || checkbox.getAttribute("aria-checked") === "true") return;
+  clickElement(checkbox);
+  await wait(180);
+}
+
 function feishuComboboxes(sectionPattern) {
   const fields = feishuFields(sectionPattern);
   const roots = [...document.querySelectorAll("[role='combobox']")].filter(isVisibleElement);
@@ -809,29 +833,42 @@ function scrollFeishuYearList(targetYear) {
 
 async function ensureFeishuRows(sectionPattern, fieldsPerRow, desiredCount) {
   for (let attempt = 0; attempt < desiredCount + 2; attempt += 1) {
-    const count = Math.floor(feishuDataFields(sectionPattern).length / fieldsPerRow);
+    const count = feishuSemanticRowCount(sectionPattern) ||
+      Math.floor(feishuDataFields(sectionPattern).length / fieldsPerRow);
     if (count >= desiredCount) return;
     const add = findFeishuAdd(sectionPattern);
     if (!add) return;
+    add.scrollIntoView({ block: "center", inline: "nearest" });
+    await wait(80);
     clickElement(add);
-    await wait(140);
+    await wait(360);
   }
 }
 
+function feishuSemanticRowCount(sectionPattern) {
+  let prefix = "";
+  if (sectionPattern.test("实习经历")) prefix = "internship";
+  else if (sectionPattern.test("项目经历")) prefix = "project";
+  else return 0;
+  const indexes = [...document.querySelectorAll(`[data-cy^="${prefix}["]`)]
+    .map((element) => String(element.getAttribute("data-cy") || "").match(new RegExp(`^${prefix}\\[(\\d+)\\]`)))
+    .filter(Boolean)
+    .map((match) => Number(match[1]));
+  return indexes.length ? Math.max(...indexes) + 1 : 0;
+}
+
 function findFeishuAdd(sectionPattern) {
-  const anchors = [...document.querySelectorAll("body *")].filter((element) =>
-    isVisibleElement(element) && sectionPattern.test(compactText(element.innerText || element.textContent || ""))
-  );
-  const anchor = anchors.sort((a, b) => (a.innerText || "").length - (b.innerText || "").length)[0];
+  const anchors = feishuSectionAnchors();
+  const anchorIndex = anchors.findIndex((item) => sectionPattern.test(item.text));
+  const anchor = anchors[anchorIndex]?.element;
   if (!anchor) return null;
-  let section = anchor.parentElement;
-  for (let depth = 0; section && depth < 6; depth += 1, section = section.parentElement) {
-    const add = [...section.querySelectorAll("button, [role='button'], div, span")]
-      .filter(isVisibleElement)
-      .find((element) => compactText(element.innerText || element.textContent || "") === "添加");
-    if (add) return add;
-  }
-  return null;
+  const nextAnchor = anchors[anchorIndex + 1]?.element || null;
+  const candidates = [...document.querySelectorAll(".formOperate-addBtn, .createFormSection-addBtn, button, [role='button']")]
+    .filter(isVisibleElement)
+    .filter((element) => compactText(element.innerText || element.textContent || "") === "添加")
+    .filter((element) => isNodeBefore(anchor, element))
+    .filter((element) => !nextAnchor || isNodeBefore(element, nextAnchor));
+  return candidates[0] || null;
 }
 
 function mokaDateField(sectionPattern, labelPattern, unit, occurrence = 0) {
