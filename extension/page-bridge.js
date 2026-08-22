@@ -74,4 +74,39 @@
     if (ok) await new Promise((resolve) => setTimeout(resolve, 120));
     window.dispatchEvent(new CustomEvent(`${marker}:selected`, { detail: { ok } }));
   });
+
+  document.addEventListener("offeros:value", async (event) => {
+    const marker = String(event.detail?.marker || "");
+    if (!marker) return;
+    const control = document.querySelector(`[data-offeros-value-id="${CSS.escape(marker)}"]`);
+    let ok = false;
+
+    try {
+      if (control) {
+        const value = String(event.detail?.value || "");
+        const previous = control.value;
+        const prototype = control instanceof HTMLTextAreaElement
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+        if (setter) setter.call(control, value);
+        else control.value = value;
+        control._valueTracker?.setValue?.(previous);
+        control.dispatchEvent(new InputEvent("input", {
+          bubbles: true,
+          composed: true,
+          inputType: "insertText",
+          data: value
+        }));
+        control.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        control.dispatchEvent(new FocusEvent("blur", { bubbles: true, composed: true }));
+        ok = control.value === value;
+      }
+    } catch {
+      ok = false;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    window.dispatchEvent(new CustomEvent(`${marker}:valued`, { detail: { ok } }));
+  });
 })();

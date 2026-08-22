@@ -103,7 +103,7 @@ let mokaAnchorCache = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.5.2" });
+    sendResponse({ ok: true, version: "0.5.3" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -1333,11 +1333,44 @@ async function applyValue(element, value) {
   } else if (element.isContentEditable || element.getAttribute("contenteditable") === "true") {
     element.textContent = normalizeValueForElement(element, value);
   } else {
-    setNativeValue(element, normalizeValueForElement(element, value));
+    const formattedValue = normalizeValueForElement(element, value);
+    if (isFeishuJobsPage() && isDateLikeElement(element)) {
+      const accepted = await runPageWorldValue(element, formattedValue);
+      if (accepted) return true;
+    }
+    setNativeValue(element, formattedValue);
   }
   dispatchInputEvents(element);
   if (isMokaPage()) closeOpenCustomDropdowns(element);
   return true;
+}
+
+function runPageWorldValue(element, value) {
+  const doc = element.ownerDocument || document;
+  if (!doc.documentElement || !window.addEventListener || typeof CustomEvent !== "function") return Promise.resolve(false);
+
+  const marker = `offeros-value-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  element.setAttribute("data-offeros-value-id", marker);
+  return new Promise((resolve) => {
+    const eventName = `${marker}:valued`;
+    const cleanup = () => {
+      window.removeEventListener(eventName, onResult);
+      element.removeAttribute("data-offeros-value-id");
+    };
+    const timer = window.setTimeout(() => {
+      cleanup();
+      resolve(false);
+    }, 450);
+    const onResult = (event) => {
+      window.clearTimeout(timer);
+      cleanup();
+      resolve(Boolean(event.detail?.ok));
+    };
+    window.addEventListener(eventName, onResult, { once: true });
+    doc.dispatchEvent(new CustomEvent("offeros:value", {
+      detail: { marker, value: String(value || "") }
+    }));
+  });
 }
 
 async function fillCustomControl(element, value) {

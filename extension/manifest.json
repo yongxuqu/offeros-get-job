@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OfferOS 填表助手",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "从 OfferOS 同步简历字段，扫描网申页面并在确认后填充。",
   "permissions": ["activeTab", "storage", "scripting"],
   "host_permissions": ["<all_urls>"],
