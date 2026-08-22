@@ -94,7 +94,7 @@ const LABEL_SELECTOR = [
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.4.0" });
+    sendResponse({ ok: true, version: "0.4.1" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -159,9 +159,9 @@ async function fillMokaResume(profile) {
     if (ok) {
       filled.add(element);
       closeOpenCustomDropdowns(element);
-      await wait(80);
+      await wait(45);
       closeOpenCustomDropdowns(element);
-      await wait(40);
+      await wait(20);
     }
     return ok;
   };
@@ -373,7 +373,7 @@ async function ensureMokaRows(sectionPattern, markerLabelPattern, desiredCount) 
     const button = findMokaAddButton(sectionPattern);
     if (!button) return;
     clickElement(button);
-    await wait(260);
+    await wait(160);
   }
 }
 
@@ -998,20 +998,25 @@ async function applyValue(element, value) {
 async function fillCustomControl(element, value) {
   const formattedValue = normalizeValueForElement(element, value);
   const rootDocument = element.ownerDocument || document;
+  const fastMoka = isMokaPage();
+  const optionTimeout = fastMoka ? 420 : 700;
+  const retryTimeout = fastMoka ? 280 : 500;
+  const settleWait = fastMoka ? 70 : 110;
+  const fallbackWait = fastMoka ? 45 : 80;
 
   await openCustomControl(element, [formattedValue, value], rootDocument);
-  let option = await waitForCustomOption([formattedValue, value], rootDocument, 700);
+  let option = await waitForCustomOption([formattedValue, value], rootDocument, optionTimeout);
   if (!option) {
     setNativeValue(element, formattedValue);
     dispatchInputEvents(element);
     dispatchKeyboardEvents(element, "ArrowDown");
-    await wait(60);
-    option = await waitForCustomOption([formattedValue, value], rootDocument, 500);
+    await wait(fallbackWait);
+    option = await waitForCustomOption([formattedValue, value], rootDocument, retryTimeout);
   }
   if (option) {
     clickCustomOption(option);
     dispatchKeyboardEvents(element, "Enter");
-    await wait(110);
+    await wait(settleWait);
     forceCustomInputValue(element, formattedValue);
     dispatchInputEvents(element);
     closeOpenCustomDropdowns(element);
@@ -1022,15 +1027,15 @@ async function fillCustomControl(element, value) {
     setNativeValue(element, formattedValue);
     dispatchInputEvents(element);
     closeOpenCustomDropdowns(element);
-    await wait(80);
+    await wait(fallbackWait);
     return normalize(getElementValue(element)) === normalize(formattedValue);
   }
 
-  if (isMokaPage()) {
+  if (fastMoka) {
     forceCustomInputValue(element, formattedValue);
     dispatchInputEvents(element);
     closeOpenCustomDropdowns(element);
-    await wait(80);
+    await wait(fallbackWait);
     return Boolean(getElementValue(element));
   }
 
@@ -1047,7 +1052,7 @@ async function openCustomControl(element, values, rootDocument) {
   ]);
   for (const target of targets) {
     clickElement(target);
-    await wait(70);
+    await wait(45);
     if (values.some((value) => findBestCustomOption(value, rootDocument))) return;
   }
 }
@@ -1248,7 +1253,7 @@ async function waitForCustomOption(values, rootDocument, timeoutMs) {
       const option = findBestCustomOption(value, rootDocument);
       if (option) return option;
     }
-    await wait(120);
+    await wait(70);
   }
   return null;
 }

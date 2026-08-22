@@ -96,6 +96,7 @@ const mappingCountEl = document.querySelector("#mapping-count");
 
 let currentMappings = [];
 let currentHost = "";
+let busyMessage = "";
 
 chrome.storage.local.get(
   ["offerosProfile", "offerosServerBase", "offerosPluginToken", "offerosLastSync", "zhixuProfile", "zhixuServerBase", "zhixuPluginToken"],
@@ -161,24 +162,32 @@ document.querySelector("#scan").addEventListener("click", async () => {
 });
 
 document.querySelector("#fill").addEventListener("click", async () => {
+  let profile = null;
   try {
-    const profile = readProfile();
+    profile = readProfile();
+    currentHost = await activeHost();
+    setBusy(true, fillBusyMessage(currentHost));
     if (!currentMappings.length) {
       const response = await sendToTab({ type: "OFFEROS_PREVIEW", profile });
-      currentHost = await activeHost();
       currentMappings = await applySavedOverrides(response?.mappings || [], profile);
+      renderMappings(currentMappings);
     }
     const selectedMappings = selectedMappingPayload();
     if (!selectedMappings.length) {
+      setBusy(false);
       showMessage("请先选择要填充的字段", "error");
       return;
     }
     const response = await sendToTab({ type: "OFFEROS_FILL", profile, selectedMappings });
+    setBusy(false);
     currentMappings = await applySavedOverrides(response?.mappings || [], profile);
     renderMappings(currentMappings, true);
-    syncMetaEl.textContent = `已填充 ${currentMappings.filter((item) => item.filled).length} 个字段`;
+    syncMetaEl.textContent = `已处理 ${filledOrStructuredCount(currentMappings, profile)} 个字段`;
   } catch (error) {
+    setBusy(false);
     showMessage(`填充失败：${tabErrorLabel(error.message)}`, "error");
+  } finally {
+    setBusy(false);
   }
 });
 
@@ -271,24 +280,30 @@ async function applySavedOverrides(mappings, profile) {
 
 function renderMappings(mappings, afterFill = false) {
   const visible = mappings.filter((item) => item.field || item.label);
-  const fillableCount = visible.filter((item) => selectedField(item) && profileValue(readProfile(), selectedField(item)) && item.canFill).length;
+  const profile = readProfile();
+  const fillableCount = visible.filter((item) => {
+    const field = selectedField(item);
+    const value = item.value || profileValue(profile, field);
+    return field && value && (item.canFill || canStructuredFill(item, field, value));
+  }).length;
   mappingCountEl.textContent = `${fillableCount}/${visible.length} 项`;
   resultEl.innerHTML = visible.length
-    ? visible.map((item) => mappingRow(item, afterFill)).join("")
+    ? `${busyMessage ? busyNoticeHtml(busyMessage) : ""}${visible.map((item) => mappingRow(item, afterFill, profile)).join("")}`
     : `<div class="empty">没有找到可填写字段</div>`;
 }
 
-function mappingRow(item, afterFill) {
+function mappingRow(item, afterFill, profile = readProfile()) {
   const field = selectedField(item);
-  const value = item.value || profileValue(readProfile(), field);
-  const canFill = Boolean(item.canFill);
+  const value = item.value || profileValue(profile, field);
+  const structuredFill = canStructuredFill(item, field, value);
+  const canFill = Boolean(item.canFill || structuredFill);
   const disabled = !field || !value || !canFill;
-  const state = mappingState(item, field, value, afterFill);
+  const state = mappingState(item, field, value, afterFill, structuredFill);
   const sensitive = SENSITIVE_FIELDS.has(field) || item.sensitive;
-  const checked = Boolean(item.canAutoSelect || item.manual) && Boolean(field && value && canFill) && !sensitive;
-  const hint = mappingHint(item, field, value, sensitive);
+  const checked = Boolean(item.canAutoSelect || item.manual || structuredFill) && Boolean(field && value && canFill) && !sensitive;
+  const hint = mappingHint(item, field, value, sensitive, structuredFill);
   return `
-    <div class="mapping-row ${item.filled ? "filled" : ""} ${disabled ? "disabled" : ""} ${item.manual ? "manual" : ""} ${!canFill && field && value ? "manual-fill" : ""}">
+    <div class="mapping-row ${item.filled ? "filled" : ""} ${disabled ? "disabled" : ""} ${item.manual ? "manual" : ""} ${structuredFill ? "structured" : ""} ${!item.canFill && field && value && !structuredFill ? "manual-fill" : ""}">
       <input type="checkbox" data-index="${item.index}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""} />
       <span class="mapping-main">
         <strong title="${escapeHtml(item.label || "未命名字段")}">${escapeHtml(item.label || "未命名字段")}</strong>
@@ -303,22 +318,68 @@ function mappingRow(item, afterFill) {
   `;
 }
 
-function mappingState(item, field, value, afterFill) {
-  if (afterFill) return item.filled ? { label: "已填", className: "ok" } : { label: "未填", className: "muted" };
+function mappingState(item, field, value, afterFill, structuredFill = false) {
+  if (afterFill) {
+    if (item.filled) return { label: "已填", className: "ok" };
+    if (structuredFill) return { label: "已处理", className: "ok" };
+    return { label: "未填", className: "muted" };
+  }
   if (!field) return { label: "未识别", className: "muted" };
   if (!value) return { label: "无数据", className: "muted" };
+  if (structuredFill) return { label: "结构化填充", className: "ok" };
   if (item.elementCustom && item.canFill) return { label: "自动选择", className: "ok" };
   if (!item.canFill) return { label: "需处理", className: "warn" };
   return { label: item.confidence || "已识别", className: "" };
 }
 
-function mappingHint(item, field, value, sensitive) {
+function mappingHint(item, field, value, sensitive, structuredFill = false) {
   if (sensitive) return "敏感字段，需手动勾选";
   if (!field) return "";
   if (!value) return "本地简历没有这个字段";
+  if (structuredFill) return "Moka 页面会按经历分组自动写入";
   if (item.elementCustom && item.canFill) return "网页控件会自动选择";
   if (!item.canFill) return "网页控件无法自动处理";
   return "";
+}
+
+function canStructuredFill(item, field, value) {
+  if (!isMokaHost() || !field || !value || item.canFill) return false;
+  return /^(education\.0\.|internships(?:\.|$)|projects(?:\.|$)|awards(?:\.|$)|selfDescription$|profile\.(gender|currentLocation)$)/.test(field);
+}
+
+function filledOrStructuredCount(mappings, profile) {
+  return mappings.filter((item) => {
+    const field = selectedField(item);
+    const value = item.value || profileValue(profile, field);
+    return item.filled || canStructuredFill(item, field, value);
+  }).length;
+}
+
+function isMokaHost(host = currentHost) {
+  return /(^|\.)mokahr\.com$/i.test(host || "");
+}
+
+function fillBusyMessage(host) {
+  if (isMokaHost(host)) {
+    return "正在填充 Moka 表单：会自动新增经历并逐项选择，预计 10-20 秒，请保持页面打开。";
+  }
+  return "正在填充当前页面，请保持页面打开。";
+}
+
+function setBusy(isBusy, message = "") {
+  busyMessage = isBusy ? message : "";
+  document.body.classList.toggle("is-busy", isBusy);
+  document.querySelectorAll("button").forEach((button) => {
+    button.disabled = isBusy;
+  });
+  if (isBusy) {
+    syncMetaEl.textContent = message;
+    mappingCountEl.textContent = "填充中";
+  }
+}
+
+function busyNoticeHtml(message) {
+  return `<div class="busy-notice"><span></span>${escapeHtml(message)}</div>`;
 }
 
 function fieldOptionsHtml(selected) {
