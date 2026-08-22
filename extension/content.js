@@ -103,7 +103,7 @@ let mokaAnchorCache = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.5.1" });
+    sendResponse({ ok: true, version: "0.5.2" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -1746,6 +1746,17 @@ function formatNestedValue(value) {
 function normalizeValueForElement(element, value, extraText = "") {
   const raw = String(value || "").trim();
   const type = (element.getAttribute("type") || "").toLowerCase();
+  const dateHint = normalize([
+    element.getAttribute("placeholder"),
+    element.getAttribute("aria-label"),
+    componentLabel(element),
+    labelForId(element),
+    extraText
+  ].filter(Boolean).join(" "));
+  if (/^yyyy$|年份|获奖时间/.test(dateHint)) {
+    const year = raw.match(/(?:19|20)\d{2}/)?.[0];
+    if (year) return year;
+  }
   const datePart = datePartValueForElement(element, raw, extraText);
   if (datePart !== "") return datePart;
   if (wantsMonthValue(element, extraText)) {
