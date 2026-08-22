@@ -103,7 +103,7 @@ let mokaAnchorCache = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.5.3" });
+    sendResponse({ ok: true, version: "0.5.8" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -294,31 +294,33 @@ async function fillFeishuResume(profile) {
   await fill(educationFields[0], education.schoolName);
   await fill(feishuComboboxes(/教育经历/).find((element) => /学历/.test(mokaElementLabelText(element))), education.degree);
   await fill(educationFields[1], education.major);
-  await fillFeishuRange(educationFields[2], education.startDate, education.endDate);
+  await fillFeishuPeriod(feishuPeriodContainers(/教育经历/)[0], education.startDate, education.endDate);
 
   const internships = profileList(profile, "internships", ["company", "position", "startDate", "endDate", "description"]).slice(0, 6);
-  await ensureFeishuRows(/实习经历/, 4, internships.length);
+  await ensureFeishuRows(/实习经历/, 3, internships.length);
   const internshipFields = feishuDataFields(/实习经历/);
+  const internshipPeriods = feishuPeriodContainers(/实习经历/);
   for (let index = 0; index < internships.length; index += 1) {
     const item = internships[index];
-    const offset = index * 4;
+    const offset = index * 3;
     await fill(internshipFields[offset], item.company);
     await fill(internshipFields[offset + 1], item.position);
-    await fillFeishuRange(internshipFields[offset + 2], item.startDate, item.endDate);
-    await fill(internshipFields[offset + 3], item.description);
+    await fillFeishuPeriod(internshipPeriods[index], item.startDate, item.endDate);
+    await fill(internshipFields[offset + 2], item.description);
   }
 
   const projects = profileList(profile, "projects", ["name", "role", "startDate", "endDate", "link", "description"]).slice(0, 6);
-  await ensureFeishuRows(/项目经历/, 5, projects.length);
+  await ensureFeishuRows(/项目经历/, 4, projects.length);
   const projectFields = feishuDataFields(/项目经历/);
+  const projectPeriods = feishuPeriodContainers(/项目经历/);
   for (let index = 0; index < projects.length; index += 1) {
     const item = projects[index];
-    const offset = index * 5;
+    const offset = index * 4;
     await fill(projectFields[offset], item.name);
     await fill(projectFields[offset + 1], item.role);
-    await fillFeishuRange(projectFields[offset + 2], item.startDate, item.endDate);
-    await fill(projectFields[offset + 3], item.link);
-    await fill(projectFields[offset + 4], item.description);
+    await fillFeishuPeriod(projectPeriods[index], item.startDate, item.endDate);
+    await fill(projectFields[offset + 2], item.link);
+    await fill(projectFields[offset + 3], item.description);
   }
 
   const portfolios = profileList(profile, "portfolios", ["name", "link", "password"]).slice(0, 6);
@@ -629,12 +631,22 @@ const FEISHU_SECTION_TITLES = ["基本信息", "教育经历", "工作经历", "
 
 function feishuFields(sectionPattern) {
   const anchors = feishuSectionAnchors();
-  return getFields().filter((field) => {
+  return getFeishuRawFields().filter((field) => {
     let title = "";
     for (const anchor of anchors) {
       if (isNodeBefore(anchor.element, field)) title = anchor.text;
     }
     return sectionPattern.test(title);
+  });
+}
+
+function getFeishuRawFields() {
+  return getFieldDocuments().flatMap((doc) => [...doc.querySelectorAll(FIELD_SELECTOR)]).filter((element) => {
+    const type = (element.getAttribute("type") || "").toLowerCase();
+    const placeholder = compactText(element.getAttribute("placeholder") || "");
+    const readonlyDatePart = element.readOnly && /YYYY\s*-?\s*MM/i.test(placeholder);
+    const readonly = element.readOnly && !readonlyDatePart && !isReadonlyCustomControl(element);
+    return !(isHiddenElement(element) || element.disabled || readonly || IGNORED_TYPES.has(type));
   });
 }
 
@@ -663,8 +675,20 @@ function feishuField(sectionPattern, labelPattern, occurrence = 0, options = {})
 function feishuDataFields(sectionPattern) {
   return feishuFields(sectionPattern).filter((element) => {
     const type = (element.getAttribute?.("type") || "").toLowerCase();
-    return type !== "checkbox" && type !== "file";
+    return type !== "checkbox" && type !== "file" &&
+      !element.closest?.(".atsx-date-picker-period-month");
   });
+}
+
+function feishuPeriodContainers(sectionPattern) {
+  let prefix = "";
+  if (sectionPattern.test("教育经历")) prefix = "education[";
+  else if (sectionPattern.test("实习经历")) prefix = "internship[";
+  else if (sectionPattern.test("项目经历")) prefix = "project[";
+  const containers = [...document.querySelectorAll(".atsx-date-picker-period-month")]
+    .filter(isVisibleElement);
+  if (!prefix) return containers.filter((element) => sectionPattern.test(feishuSectionForElement(element)));
+  return containers.filter((element) => String(element.getAttribute("data-cy") || "").startsWith(prefix));
 }
 
 function feishuComboboxes(sectionPattern) {
@@ -692,11 +716,95 @@ function feishuDateField(sectionPattern, occurrence = 0) {
   return candidates[occurrence] || null;
 }
 
-async function fillFeishuRange(element, startDate, endDate) {
-  if (!element || !String(startDate || "").trim() || !String(endDate || "").trim()) return false;
-  const start = String(startDate).slice(0, 7);
-  const end = String(endDate).slice(0, 7);
-  return applyValue(element, `${start} - ${end}`);
+async function fillFeishuPeriod(container, startDate, endDate) {
+  if (!container || !String(startDate || "").trim() || !String(endDate || "").trim()) return false;
+  const start = parseYearMonth(startDate);
+  const end = parseYearMonth(endDate);
+  if (!start || !end) return false;
+
+  const selectSide = async (side, date) => {
+    closeOpenCustomDropdowns(container);
+    container.scrollIntoView({ block: "center", inline: "nearest" });
+    await wait(140);
+    clickFeishuPeriodSide(container, side);
+    await wait(180);
+    const year = await waitForFeishuDateOption(date.year, 1600, { year: true, exclude: container });
+    if (!year) return false;
+    clickElement(year);
+    await wait(100);
+    const month = await waitForFeishuDateOption(date.month, 1000, { exclude: container });
+    if (!month) return false;
+    clickElement(month);
+    await wait(220);
+    return true;
+  };
+
+  if (!await selectSide("start", start)) return false;
+  if (!await selectSide("end", end)) return false;
+  await wait(180);
+  const visibleText = compactText(container.innerText || container.textContent || "");
+  return visibleText.includes(`${start.year}-${start.month}`) && visibleText.includes(`${end.year}-${end.month}`);
+}
+
+function clickFeishuPeriodSide(container, side) {
+  const suffix = side === "end" ? "End" : "Begin";
+  const semanticTarget = [...container.querySelectorAll("[data-cy]")]
+    .find((element) => String(element.getAttribute("data-cy") || "").endsWith(suffix));
+  if (semanticTarget) {
+    clickElement(semanticTarget);
+    return;
+  }
+  const rect = container.getBoundingClientRect();
+  const x = rect.left + rect.width * (side === "end" ? 0.75 : 0.25);
+  const y = rect.top + rect.height / 2;
+  const target = document.elementFromPoint(x, y) || container;
+  for (const type of ["mousedown", "mouseup", "click"]) {
+    target.dispatchEvent(new MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+      button: 0
+    }));
+  }
+}
+
+function parseYearMonth(value) {
+  const match = String(value || "").match(/((?:19|20)\d{2})[-/.年](\d{1,2})/);
+  if (!match) return null;
+  return { year: match[1], month: String(Number(match[2])).padStart(2, "0") };
+}
+
+async function waitForFeishuDateOption(value, timeoutMs, options = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    const matches = [...document.querySelectorAll("body *")]
+      .filter(isVisibleElement)
+      .filter((node) => compactText(node.innerText || node.textContent || "") === value)
+      .filter((node) => !node.closest?.(".atsx-date-picker-period-month"))
+      .filter((node) => node.closest?.("[class*='date-picker'], [class*='picker-panel'], [class*='popover'], [class*='dropdown']"));
+    if (matches.length) return matches.sort((a, b) => elementDepth(b) - elementDepth(a))[0];
+    if (options.year) scrollFeishuYearList(value);
+    await wait(50);
+  }
+  return null;
+}
+
+function scrollFeishuYearList(targetYear) {
+  const visibleYears = [...document.querySelectorAll("body *")]
+    .filter(isVisibleElement)
+    .filter((node) => /^(?:19|20)\d{2}$/.test(compactText(node.innerText || node.textContent || "")))
+    .filter((node) => node.closest?.("[class*='date-picker'], [class*='picker-panel'], [class*='popover'], [class*='dropdown']"));
+  if (!visibleYears.length) return;
+  const sample = visibleYears.sort((a, b) => elementDepth(b) - elementDepth(a))[0];
+  let scroller = sample.parentElement;
+  while (scroller && scroller.scrollHeight <= scroller.clientHeight + 2) scroller = scroller.parentElement;
+  if (!scroller) return;
+  const years = visibleYears.map((node) => Number(compactText(node.innerText || node.textContent || "")));
+  const target = Number(targetYear);
+  const delta = target > Math.max(...years) ? -160 : 160;
+  scroller.scrollTop += delta;
+  scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
 }
 
 async function ensureFeishuRows(sectionPattern, fieldsPerRow, desiredCount) {
