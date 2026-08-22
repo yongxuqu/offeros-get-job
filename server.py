@@ -597,6 +597,7 @@ def empty_resume() -> dict:
         "projects": [],
         "awards": [],
         "portfolios": [],
+        "languageAbilities": [],
         "selfDescription": "",
         "verifier": {"name": "", "identity": "", "phone": ""},
         "abilityTags": [],
@@ -975,7 +976,7 @@ def resume_has_content(resume: dict) -> bool:
     ]
     if any(has_meaningful_value(profile.get(key)) for key in profile_keys):
         return True
-    for key in ("education", "internships", "projects", "awards", "portfolios", "abilityTags", "gaps"):
+    for key in ("education", "internships", "projects", "awards", "portfolios", "languageAbilities", "abilityTags", "gaps"):
         if has_filled_items(resume.get(key) or []):
             return True
     return any(has_meaningful_value(resume.get(key)) for key in ("selfDescription", "summary"))
@@ -1087,6 +1088,7 @@ def parse_resume_with_external_api(file_info: dict, raw_text: str, fallback: dic
             "projects": [{"name": "", "role": "", "startDate": "", "endDate": "", "description": "", "link": ""}],
             "awards": [{"type": "", "date": "", "description": ""}],
             "portfolios": [{"name": "", "link": "", "password": ""}],
+            "languageAbilities": [{"language": "", "proficiency": "", "listeningSpeaking": "", "readingWriting": "", "certificate": ""}],
             "selfDescription": "",
             "verifier": {"name": "", "identity": "", "phone": ""},
             "abilityTags": [{"name": "", "confidence": 0.75, "evidence": ""}],
@@ -2635,6 +2637,8 @@ def flatten_resume_fields(resume: dict) -> dict:
     first_award = awards[0] if awards else {}
     portfolios = resume.get("portfolios") or []
     first_portfolio = portfolios[0] if portfolios else {}
+    language_abilities = resume.get("languageAbilities") or []
+    first_language = language_abilities[0] if language_abilities else {}
     verifier = resume.get("verifier") or {}
     fields = {
         "profile.name": profile.get("name", ""),
@@ -2681,6 +2685,12 @@ def flatten_resume_fields(resume: dict) -> dict:
         "portfolios.0.link": first_portfolio.get("link", ""),
         "portfolios.0.password": first_portfolio.get("password", ""),
         "portfolios": format_list_items(portfolios, ["name", "link", "password"]),
+        "languageAbilities.0.language": first_language.get("language", ""),
+        "languageAbilities.0.proficiency": first_language.get("proficiency", ""),
+        "languageAbilities.0.listeningSpeaking": first_language.get("listeningSpeaking", ""),
+        "languageAbilities.0.readingWriting": first_language.get("readingWriting", ""),
+        "languageAbilities.0.certificate": first_language.get("certificate", ""),
+        "languageAbilities": format_list_items(language_abilities, ["language", "proficiency", "listeningSpeaking", "readingWriting", "certificate"]),
         "selfDescription": resume.get("selfDescription", ""),
         "verifier.name": verifier.get("name", ""),
         "verifier.identity": verifier.get("identity", ""),
@@ -2693,6 +2703,7 @@ def flatten_resume_fields(resume: dict) -> dict:
     add_indexed_resume_fields(fields, "projects", projects, ["name", "role", "startDate", "endDate", "description", "link"])
     add_indexed_resume_fields(fields, "awards", awards, ["type", "date", "description"])
     add_indexed_resume_fields(fields, "portfolios", portfolios, ["name", "link", "password"])
+    add_indexed_resume_fields(fields, "languageAbilities", language_abilities, ["language", "proficiency", "listeningSpeaking", "readingWriting", "certificate"])
     return {key: value for key, value in fields.items() if value}
 
 

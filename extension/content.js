@@ -48,6 +48,12 @@ const FIELD_RULES = [
   { field: "portfolios.0.link", label: "作品链接", sensitive: false, patterns: ["作品链接", "个人主页", "主页链接", "作品地址", "网址", "url", "link", "website"] },
   { field: "portfolios.0.password", label: "作品提取码", sensitive: false, patterns: ["提取码", "访问密码", "作品密码", "密码", "password"] },
   { field: "portfolios", label: "作品主页", sensitive: false, patterns: ["作品或个人主页", "作品链接", "个人主页", "作品", "主页", "portfolio", "website"] },
+  { field: "languageAbilities.0.language", label: "语言类型", sensitive: false, patterns: ["语言类型", "语言名称", "外语语种", "语种", "language"] },
+  { field: "languageAbilities.0.proficiency", label: "掌握程度", sensitive: false, patterns: ["掌握程度", "语言水平", "熟练程度", "proficiency"] },
+  { field: "languageAbilities.0.listeningSpeaking", label: "听说能力", sensitive: false, patterns: ["听说能力", "听说", "口语水平", "speaking", "listening"] },
+  { field: "languageAbilities.0.readingWriting", label: "读写能力", sensitive: false, patterns: ["读写能力", "读写", "阅读写作", "reading", "writing"] },
+  { field: "languageAbilities.0.certificate", label: "语言证书", sensitive: false, patterns: ["证书或成绩", "语言证书", "考试成绩", "cet", "雅思", "托福", "certificate", "score"] },
+  { field: "languageAbilities", label: "语言能力", sensitive: false, patterns: ["语言能力", "外语能力", "语言水平", "language ability"] },
   { field: "selfDescription", label: "自我描述", sensitive: false, patterns: ["自我描述", "自我评价", "个人总结", "个人简介", "self introduction"] }
 ];
 
@@ -97,7 +103,7 @@ let mokaAnchorCache = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.4.4" });
+    sendResponse({ ok: true, version: "0.5.0" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -119,7 +125,47 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 function buildMappings(profile) {
   if (isMokaPage()) return buildMokaMappings(profile);
+  if (isFeishuJobsPage()) return buildFeishuMappings(profile);
   return getFields().map((element, index) => describeField(element, index, profile));
+}
+
+function buildFeishuMappings(profile) {
+  const fields = getFields();
+  const basic = feishuDataFields(/基本信息/);
+  const education = feishuDataFields(/教育经历/);
+  const specs = [
+    [basic[0], "姓名", "profile.name"],
+    [basic[1], "邮箱", "profile.email"],
+    [education[0], "学校名称", "education.0.schoolName"],
+    [feishuComboboxes(/教育经历/)[1], "学历", "education.0.degree"],
+    [education[1], "专业", "education.0.major"],
+    [feishuDataFields(/实习经历/)[0], "实习经历", "internships"],
+    [feishuDataFields(/项目经历/)[0], "项目经历", "projects"],
+    [feishuDataFields(/作品/)[0], "作品", "portfolios"],
+    [feishuDataFields(/获奖/)[0], "获奖", "awards"],
+    [feishuDataFields(/语言能力/)[0], "语言能力", "languageAbilities"],
+    [feishuDataFields(/自我评价/)[0], "自我评价", "selfDescription"]
+  ];
+  return specs.flatMap(([element, label, field], summaryIndex) => {
+    const value = getProfileValue(profile, field);
+    if (!element || !String(value || "").trim()) return [];
+    const index = fields.indexOf(element);
+    return [{
+      index: index >= 0 ? index : summaryIndex,
+      signature: fieldSignature(element, label),
+      label,
+      field,
+      fieldLabel: FIELD_META[field]?.label || label,
+      value,
+      confidence: 100,
+      canFill: true,
+      canAutoSelect: true,
+      sensitive: Boolean(FIELD_META[field]?.sensitive),
+      type: elementTypeName(element),
+      currentValue: getElementValue(element),
+      contexts: []
+    }];
+  });
 }
 
 function buildMokaMappings(profile) {
@@ -165,6 +211,9 @@ async function fillFields(profile, selectedMappings, selectedIndexes) {
   if (isMokaPage()) {
     return fillMokaResume(profile);
   }
+  if (isFeishuJobsPage()) {
+    return fillFeishuResume(profile);
+  }
 
   const selected = normalizeSelectedMappings(selectedMappings, selectedIndexes);
   const mappings = [];
@@ -191,7 +240,11 @@ async function fillFields(profile, selectedMappings, selectedIndexes) {
 }
 
 function isMokaPage() {
-  return /(^|\.)mokahr\.com$/i.test(window.location.hostname);
+  return /(^|\.)mokahr\.com$/i.test(window.location?.hostname || "");
+}
+
+function isFeishuJobsPage() {
+  return /(^|\.)jobs\.feishu\.cn$/i.test(window.location?.hostname || "");
 }
 
 async function fillMokaResume(profile) {
@@ -224,6 +277,86 @@ async function fillMokaResume(profile) {
       currentValue: element ? getElementValue(element) : mapping.currentValue
     };
   });
+}
+
+async function fillFeishuResume(profile) {
+  const fill = async (element, value) => {
+    if (!element || !String(value || "").trim()) return false;
+    return applyValue(element, value);
+  };
+
+  const basicFields = feishuDataFields(/基本信息/);
+  await fill(basicFields[0], profileValue(profile, "profile.name"));
+  await fill(basicFields[1], profileValue(profile, "profile.email"));
+
+  const education = profileList(profile, "education", ["degree", "schoolName", "startDate", "endDate", "major"])[0] || {};
+  const educationFields = feishuDataFields(/教育经历/);
+  await fill(educationFields[0], education.schoolName);
+  await fill(feishuComboboxes(/教育经历/)[1], education.degree);
+  await fill(educationFields[1], education.major);
+  await fillFeishuRange(educationFields[2], education.startDate, education.endDate);
+
+  const internships = profileList(profile, "internships", ["company", "position", "startDate", "endDate", "description"]).slice(0, 6);
+  await ensureFeishuRows(/实习经历/, 4, internships.length);
+  const internshipFields = feishuDataFields(/实习经历/);
+  for (let index = 0; index < internships.length; index += 1) {
+    const item = internships[index];
+    const offset = index * 4;
+    await fill(internshipFields[offset], item.company);
+    await fill(internshipFields[offset + 1], item.position);
+    await fillFeishuRange(internshipFields[offset + 2], item.startDate, item.endDate);
+    await fill(internshipFields[offset + 3], item.description);
+  }
+
+  const projects = profileList(profile, "projects", ["name", "role", "startDate", "endDate", "link", "description"]).slice(0, 6);
+  await ensureFeishuRows(/项目经历/, 5, projects.length);
+  const projectFields = feishuDataFields(/项目经历/);
+  for (let index = 0; index < projects.length; index += 1) {
+    const item = projects[index];
+    const offset = index * 5;
+    await fill(projectFields[offset], item.name);
+    await fill(projectFields[offset + 1], item.role);
+    await fillFeishuRange(projectFields[offset + 2], item.startDate, item.endDate);
+    await fill(projectFields[offset + 3], item.link);
+    await fill(projectFields[offset + 4], item.description);
+  }
+
+  const portfolios = profileList(profile, "portfolios", ["name", "link", "password"]).slice(0, 6);
+  await ensureFeishuRows(/作品/, 3, portfolios.length);
+  const portfolioFields = feishuDataFields(/作品/);
+  for (let index = 0; index < portfolios.length; index += 1) {
+    const item = portfolios[index];
+    const offset = index * 3;
+    await fill(portfolioFields[offset], item.name);
+    await fill(portfolioFields[offset + 1], item.link);
+    await fill(portfolioFields[offset + 2], item.password);
+  }
+
+  const awards = profileList(profile, "awards", ["type", "date", "description"]).slice(0, 8);
+  await ensureFeishuRows(/获奖/, 3, awards.length);
+  const awardFields = feishuDataFields(/获奖/);
+  for (let index = 0; index < awards.length; index += 1) {
+    const item = awards[index];
+    const offset = index * 3;
+    await fill(awardFields[offset], item.description);
+    await fill(awardFields[offset + 1], item.date);
+    await fill(awardFields[offset + 2], item.type);
+  }
+
+  const languages = profileList(profile, "languageAbilities", ["language", "proficiency", "listeningSpeaking", "readingWriting", "certificate"]).slice(0, 6);
+  await ensureFeishuRows(/语言能力/, 4, languages.length);
+  const languageFields = feishuDataFields(/语言能力/);
+  for (let index = 0; index < languages.length; index += 1) {
+    const item = languages[index];
+    const offset = index * 4;
+    await fill(languageFields[offset], item.language);
+    await fill(languageFields[offset + 1], item.proficiency);
+    await fill(languageFields[offset + 2], item.listeningSpeaking);
+    await fill(languageFields[offset + 3], item.readingWriting);
+  }
+
+  await fill(feishuDataFields(/自我评价/)[0], firstTruthy(profileValue(profile, "selfDescription"), profileValue(profile, "profile.selfDescription")));
+  return buildFeishuMappings(profile);
 }
 
 async function fillMokaBasic(profile, fill) {
@@ -490,6 +623,107 @@ function mokaField(sectionPattern, labelPattern, occurrence = 0, options = {}) {
     candidates.sort((a, b) => Number(b.tagName === "TEXTAREA") - Number(a.tagName === "TEXTAREA"));
   }
   return candidates[occurrence] || null;
+}
+
+const FEISHU_SECTION_TITLES = ["基本信息", "教育经历", "工作经历", "实习经历", "项目经历", "作品", "获奖", "语言能力", "自我评价", "社交账号"];
+
+function feishuFields(sectionPattern) {
+  const anchors = feishuSectionAnchors();
+  return getFields().filter((field) => {
+    let title = "";
+    for (const anchor of anchors) {
+      if (isNodeBefore(anchor.element, field)) title = anchor.text;
+    }
+    return sectionPattern.test(title);
+  });
+}
+
+function feishuSectionAnchors() {
+  const candidates = [...document.querySelectorAll("body *")]
+    .filter(isVisibleElement)
+    .map((element) => ({ element, text: compactText(element.innerText || element.textContent || "") }))
+    .filter((item) => FEISHU_SECTION_TITLES.includes(item.text))
+    .sort((a, b) => isNodeBefore(a.element, b.element) ? -1 : 1);
+  const seen = new Set();
+  return candidates.filter((item) => {
+    if (seen.has(item.text)) return false;
+    seen.add(item.text);
+    return true;
+  });
+}
+
+function feishuField(sectionPattern, labelPattern, occurrence = 0, options = {}) {
+  let candidates = feishuFields(sectionPattern).filter((element) => labelPattern.test(mokaElementLabelText(element)));
+  if (options.textarea !== undefined) {
+    candidates = candidates.filter((element) => (element.tagName === "TEXTAREA") === options.textarea);
+  }
+  return candidates[occurrence] || null;
+}
+
+function feishuDataFields(sectionPattern) {
+  return feishuFields(sectionPattern).filter((element) => {
+    const type = (element.getAttribute?.("type") || "").toLowerCase();
+    return type !== "checkbox" && type !== "file";
+  });
+}
+
+function feishuComboboxes(sectionPattern) {
+  const fields = feishuFields(sectionPattern);
+  const roots = [...document.querySelectorAll("[role='combobox']")].filter(isVisibleElement);
+  return roots.filter((root) => fields.some((field) => root.contains(field)) ||
+    sectionPattern.test(feishuSectionForElement(root)));
+}
+
+function feishuSectionForElement(element) {
+  let title = "";
+  const anchors = feishuSectionAnchors().map((item) => ({ node: item.element, text: item.text }));
+  for (const anchor of anchors) {
+    if (isNodeBefore(anchor.node, element)) title = anchor.text;
+  }
+  return title;
+}
+
+function feishuDateField(sectionPattern, occurrence = 0) {
+  const candidates = feishuFields(sectionPattern).filter((element) => {
+    if (element.tagName !== "INPUT") return false;
+    const label = mokaElementLabelText(element);
+    return /起止时间|获奖时间|YYYY|日期|时间/.test(label) || !compactText(element.getAttribute("placeholder") || "");
+  });
+  return candidates[occurrence] || null;
+}
+
+async function fillFeishuRange(element, startDate, endDate) {
+  if (!element || !String(startDate || "").trim() || !String(endDate || "").trim()) return false;
+  const start = String(startDate).slice(0, 7);
+  const end = String(endDate).slice(0, 7);
+  return applyValue(element, `${start} - ${end}`);
+}
+
+async function ensureFeishuRows(sectionPattern, fieldsPerRow, desiredCount) {
+  for (let attempt = 0; attempt < desiredCount + 2; attempt += 1) {
+    const count = Math.floor(feishuDataFields(sectionPattern).length / fieldsPerRow);
+    if (count >= desiredCount) return;
+    const add = findFeishuAdd(sectionPattern);
+    if (!add) return;
+    clickElement(add);
+    await wait(140);
+  }
+}
+
+function findFeishuAdd(sectionPattern) {
+  const anchors = [...document.querySelectorAll("body *")].filter((element) =>
+    isVisibleElement(element) && sectionPattern.test(compactText(element.innerText || element.textContent || ""))
+  );
+  const anchor = anchors.sort((a, b) => (a.innerText || "").length - (b.innerText || "").length)[0];
+  if (!anchor) return null;
+  let section = anchor.parentElement;
+  for (let depth = 0; section && depth < 6; depth += 1, section = section.parentElement) {
+    const add = [...section.querySelectorAll("button, [role='button'], div, span")]
+      .filter(isVisibleElement)
+      .find((element) => compactText(element.innerText || element.textContent || "") === "添加");
+    if (add) return add;
+  }
+  return null;
 }
 
 function mokaDateField(sectionPattern, labelPattern, unit, occurrence = 0) {

@@ -604,6 +604,7 @@ const App = {
       ...this.flattenText(resume.projects),
       ...this.flattenText(resume.awards),
       ...this.flattenText(resume.portfolios),
+      ...this.flattenText(resume.languageAbilities),
       ...this.resumeTags().map((tag) => tag.name),
     ].join(" "));
   },
@@ -855,6 +856,7 @@ const App = {
           ${this.renderProjects(resume.projects)}
           ${this.renderAwards(resume.awards)}
           ${this.renderPortfolios(resume.portfolios)}
+          ${this.renderLanguageAbilities(resume.languageAbilities)}
 
           <div class="resume-block">
             <h3>自我描述</h3>
@@ -923,6 +925,7 @@ const App = {
       projects: [],
       awards: [],
       portfolios: [],
+      languageAbilities: [],
       selfDescription: "",
       verifier: { name: "", identity: "", phone: "" },
       abilityTags: [],
@@ -937,6 +940,7 @@ const App = {
     merged.projects = resume?.projects || [];
     merged.awards = resume?.awards || [];
     merged.portfolios = resume?.portfolios || [];
+    merged.languageAbilities = resume?.languageAbilities || [];
     merged.verifier = { ...base.verifier, ...(resume?.verifier || {}) };
     merged.abilityTags = this.normalizeAbilityTags(resume?.abilityTags || []);
     return merged;
@@ -1042,6 +1046,16 @@ const App = {
     ]);
   },
 
+  renderLanguageAbilities(items) {
+    return this.renderSimpleList("languageAbilities", "语言能力", items, [
+      ["language", "语言类型", "select", ["", "中文", "英语", "日语", "韩语", "法语", "德语", "西班牙语", "其他"]],
+      ["proficiency", "掌握程度", "select", ["", "母语", "精通", "熟练", "良好", "一般", "入门"]],
+      ["listeningSpeaking", "听说能力", "select", ["", "精通", "熟练", "良好", "一般", "入门"]],
+      ["readingWriting", "读写能力", "select", ["", "精通", "熟练", "良好", "一般", "入门"]],
+      ["certificate", "证书或成绩"],
+    ]);
+  },
+
   renderSimpleList(key, title, items, fields) {
     return `
       <div class="resume-block">
@@ -1100,6 +1114,7 @@ const App = {
       projects: collectItems("projects", ["name", "role", "startDate", "endDate", "link", "description"]),
       awards: collectItems("awards", ["type", "date", "description"]),
       portfolios: collectItems("portfolios", ["name", "link", "password"]),
+      languageAbilities: collectItems("languageAbilities", ["language", "proficiency", "listeningSpeaking", "readingWriting", "certificate"]),
       selfDescription: this.getInput("self-description"),
       verifier: {
         name: this.getInput("verifier-name"),
@@ -1695,6 +1710,7 @@ const App = {
       projects: chooseList(current.projects, normalized.projects),
       awards: chooseList(current.awards, normalized.awards),
       portfolios: chooseList(current.portfolios, normalized.portfolios),
+      languageAbilities: chooseList(current.languageAbilities, normalized.languageAbilities),
       selfDescription: mode === "fill-empty" ? current.selfDescription || normalized.selfDescription : normalized.selfDescription || current.selfDescription,
       verifier: mergeObject(current.verifier, normalized.verifier),
       abilityTags: chooseList(current.abilityTags, normalized.abilityTags),
@@ -1736,6 +1752,7 @@ const App = {
       projects: { name: "", role: "", startDate: "", endDate: "", link: "", description: "" },
       awards: { type: "", date: "", description: "" },
       portfolios: { name: "", link: "", password: "" },
+      languageAbilities: { language: "", proficiency: "", listeningSpeaking: "", readingWriting: "", certificate: "" },
     };
     resume[key] = [...(resume[key] || []), defaults[key]];
     this.state.resume = resume;
