@@ -103,7 +103,7 @@ let mokaAnchorCache = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.5.0" });
+    sendResponse({ ok: true, version: "0.5.1" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -292,7 +292,7 @@ async function fillFeishuResume(profile) {
   const education = profileList(profile, "education", ["degree", "schoolName", "startDate", "endDate", "major"])[0] || {};
   const educationFields = feishuDataFields(/教育经历/);
   await fill(educationFields[0], education.schoolName);
-  await fill(feishuComboboxes(/教育经历/)[1], education.degree);
+  await fill(feishuComboboxes(/教育经历/).find((element) => /学历/.test(mokaElementLabelText(element))), education.degree);
   await fill(educationFields[1], education.major);
   await fillFeishuRange(educationFields[2], education.startDate, education.endDate);
 
@@ -345,7 +345,7 @@ async function fillFeishuResume(profile) {
 
   const languages = profileList(profile, "languageAbilities", ["language", "proficiency", "listeningSpeaking", "readingWriting", "certificate"]).slice(0, 6);
   await ensureFeishuRows(/语言能力/, 4, languages.length);
-  const languageFields = feishuDataFields(/语言能力/);
+  const languageFields = feishuComboboxes(/语言能力/);
   for (let index = 0; index < languages.length; index += 1) {
     const item = languages[index];
     const offset = index * 4;
@@ -938,7 +938,12 @@ function isHiddenElement(element) {
 }
 
 function isReadonlyCustomControl(element) {
-  return Boolean(element.readOnly && element.closest?.(CUSTOM_CONTROL_SELECTOR));
+  if (!element.closest?.(CUSTOM_CONTROL_SELECTOR)) return false;
+  return Boolean(
+    element.readOnly ||
+    element.getAttribute?.("role") === "combobox" ||
+    !["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName)
+  );
 }
 
 function dedupeFieldCandidates(elements) {
