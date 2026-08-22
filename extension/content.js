@@ -97,7 +97,7 @@ let mokaAnchorCache = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.4.2" });
+    sendResponse({ ok: true, version: "0.4.3" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -125,10 +125,13 @@ function buildMappings(profile) {
 function buildMokaMappings(profile) {
   mokaAnchorCache = null;
   const fields = getFields();
+  const basicSection = /个人信息|基础信息/;
+  const choiceFields = mokaBasicChoiceFields(basicSection);
   const specs = [
-    [mokaField(/\u4e2a\u4eba\u4fe1\u606f|\u57fa\u7840\u4fe1\u606f/, /^\u6027\u522b$/), "\u6027\u522b", "profile.gender"],
-    [mokaField(/\u4e2a\u4eba\u4fe1\u606f|\u57fa\u7840\u4fe1\u606f/, /\u6700\u9ad8\u5b66\u5386|\u5b66\u5386/), "\u6700\u9ad8\u5b66\u5386", "education.0.degree"],
-    [mokaField(/\u4e2a\u4eba\u4fe1\u606f|\u57fa\u7840\u4fe1\u606f/, /^\u6240\u5728\u5730$|\u73b0\u5c45|\u5f53\u524d\u6240\u5728\u5730/), "\u6240\u5728\u5730", "profile.currentLocation"],
+    [choiceFields[0] || mokaField(basicSection, /^\u6027\u522b$/), "\u6027\u522b", "profile.gender"],
+    [choiceFields[2] || mokaField(basicSection, /\u6700\u9ad8\u5b66\u5386|\u5b66\u5386/), "\u6700\u9ad8\u5b66\u5386", "education.0.degree"],
+    [mokaField(basicSection, /^\u6240\u5728\u5730$|\u73b0\u5c45|\u5f53\u524d\u6240\u5728\u5730/), "\u6240\u5728\u5730", "profile.currentLocation"],
+    [mokaField(basicSection, /^\u8bc1\u4ef6\u53f7\u7801$|^\u8bc1\u4ef6\u53f7$/), "\u8bc1\u4ef6\u53f7\u7801", "profile.idNumber"],
     [mokaField(/\u6559\u80b2\u80cc\u666f|\u6559\u80b2\u7ecf\u5386/, /\u5b66\u6821\u540d\u79f0|\u5b66\u6821|\u9662\u6821/, 0), "\u6559\u80b2\u80cc\u666f", "education.0.schoolName"],
     [mokaField(/\u5b9e\u4e60\u7ecf\u5386/, /\u516c\u53f8\u540d\u79f0|\u5b9e\u4e60\u516c\u53f8/, 0), "\u5b9e\u4e60\u7ecf\u5386", "internships"],
     [mokaField(/\u9879\u76ee\u7ecf\u9a8c|\u9879\u76ee\u7ecf\u5386/, /\u9879\u76ee\u540d\u79f0/, 0), "\u9879\u76ee\u7ecf\u5386", "projects"],
@@ -150,7 +153,7 @@ function buildMokaMappings(profile) {
       confidence: 100,
       canFill: true,
       canAutoSelect: true,
-      sensitive: false,
+      sensitive: Boolean(FIELD_META[field]?.sensitive),
       type: elementTypeName(element),
       currentValue: getElementValue(element),
       contexts: []
@@ -225,9 +228,19 @@ async function fillMokaResume(profile) {
 
 async function fillMokaBasic(profile, fill) {
   const section = /个人信息|基础信息/;
-  await fill(mokaField(section, /^性别$/), profileValue(profile, "profile.gender"));
-  await fill(mokaField(section, /最高学历|学历/), firstTruthy(profileValue(profile, "education.0.degree"), profileValue(profile, "profile.highestDegree")));
+  const choiceFields = mokaBasicChoiceFields(section);
+  const genderField = choiceFields[0] || mokaField(section, /^性别$/);
+  const highestDegreeField = choiceFields[2] || mokaField(section, /最高学历|学历/);
+  await fill(genderField, profileValue(profile, "profile.gender"));
+  await fill(highestDegreeField, firstTruthy(profileValue(profile, "education.0.degree"), profileValue(profile, "profile.highestDegree")));
   await fill(mokaField(section, /^所在地$|现居|当前所在地|当前所处地/), profileValue(profile, "profile.currentLocation"));
+  await fill(mokaField(section, /^证件号码$|^证件号$/), profileValue(profile, "profile.idNumber"));
+}
+
+function mokaBasicChoiceFields(section) {
+  return mokaFields(section).filter((element) =>
+    /请选择/.test(element.getAttribute?.("placeholder") || "") && !mokaDatePartUnit(element)
+  );
 }
 
 async function fillMokaEducation(profile, fill) {
