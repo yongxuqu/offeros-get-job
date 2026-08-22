@@ -76,6 +76,8 @@ const CUSTOM_OPTION_SELECTOR = [
   ".ant-select-item-option:not(.ant-select-item-option-disabled)",
   ".ant-select-dropdown .ant-select-item:not(.ant-select-item-option-disabled)",
   ".ant-cascader-menu-item:not(.ant-cascader-menu-item-disabled)",
+  "[class*='Menu-container']",
+  "[class*='menu-container']",
   "[role='option']:not([aria-disabled='true'])",
   "[class*='dropdown'] li",
   "[class*='select'] [class*='option']"
@@ -91,10 +93,11 @@ const LABEL_SELECTOR = [
   ".label",
   "label"
 ].join(",");
+let mokaAnchorCache = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OFFEROS_PING") {
-    sendResponse({ ok: true, version: "0.4.1" });
+    sendResponse({ ok: true, version: "0.4.2" });
     return true;
   }
   if (message.type === "OFFEROS_PREVIEW" || message.type === "ZHIXU_SCAN") {
@@ -115,7 +118,44 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 function buildMappings(profile) {
+  if (isMokaPage()) return buildMokaMappings(profile);
   return getFields().map((element, index) => describeField(element, index, profile));
+}
+
+function buildMokaMappings(profile) {
+  mokaAnchorCache = null;
+  const fields = getFields();
+  const specs = [
+    [mokaField(/\u4e2a\u4eba\u4fe1\u606f|\u57fa\u7840\u4fe1\u606f/, /^\u6027\u522b$/), "\u6027\u522b", "profile.gender"],
+    [mokaField(/\u4e2a\u4eba\u4fe1\u606f|\u57fa\u7840\u4fe1\u606f/, /\u6700\u9ad8\u5b66\u5386|\u5b66\u5386/), "\u6700\u9ad8\u5b66\u5386", "education.0.degree"],
+    [mokaField(/\u4e2a\u4eba\u4fe1\u606f|\u57fa\u7840\u4fe1\u606f/, /^\u6240\u5728\u5730$|\u73b0\u5c45|\u5f53\u524d\u6240\u5728\u5730/), "\u6240\u5728\u5730", "profile.currentLocation"],
+    [mokaField(/\u6559\u80b2\u80cc\u666f|\u6559\u80b2\u7ecf\u5386/, /\u5b66\u6821\u540d\u79f0|\u5b66\u6821|\u9662\u6821/, 0), "\u6559\u80b2\u80cc\u666f", "education.0.schoolName"],
+    [mokaField(/\u5b9e\u4e60\u7ecf\u5386/, /\u516c\u53f8\u540d\u79f0|\u5b9e\u4e60\u516c\u53f8/, 0), "\u5b9e\u4e60\u7ecf\u5386", "internships"],
+    [mokaField(/\u9879\u76ee\u7ecf\u9a8c|\u9879\u76ee\u7ecf\u5386/, /\u9879\u76ee\u540d\u79f0/, 0), "\u9879\u76ee\u7ecf\u5386", "projects"],
+    [mokaField(/\u83b7\u5956\u7ecf\u5386|\u83b7\u5956\u4fe1\u606f/, /\u5956\u9879\u540d\u79f0|\u5956\u9879\u8bf4\u660e|\u83b7\u5956\u8bf4\u660e/, 0), "\u83b7\u5956\u7ecf\u5386", "awards"],
+    [mokaField(/\u81ea\u6211\u63cf\u8ff0|\u81ea\u6211\u8bc4\u4ef7/, /\u81ea\u6211\u63cf\u8ff0|\u81ea\u6211\u8bc4\u4ef7|\u4e2a\u4eba\u7b80\u4ecb/, 0, { textarea: true }), "\u81ea\u6211\u63cf\u8ff0", "selfDescription"]
+  ];
+
+  return specs.flatMap(([element, label, field], summaryIndex) => {
+    const value = getProfileValue(profile, field);
+    if (!element || !String(value || "").trim()) return [];
+    const index = fields.indexOf(element);
+    return [{
+      index: index >= 0 ? index : summaryIndex,
+      signature: fieldSignature(element, label),
+      label,
+      field,
+      fieldLabel: FIELD_META[field]?.label || label,
+      value,
+      confidence: 100,
+      canFill: true,
+      canAutoSelect: true,
+      sensitive: false,
+      type: elementTypeName(element),
+      currentValue: getElementValue(element),
+      contexts: []
+    }];
+  });
 }
 
 async function fillFields(profile, selectedMappings, selectedIndexes) {
@@ -152,15 +192,13 @@ function isMokaPage() {
 }
 
 async function fillMokaResume(profile) {
+  mokaAnchorCache = null;
   const filled = new WeakSet();
   const fill = async (element, value) => {
     if (!element || !String(value || "").trim()) return false;
     const ok = await applyValue(element, value);
     if (ok) {
       filled.add(element);
-      closeOpenCustomDropdowns(element);
-      await wait(45);
-      closeOpenCustomDropdowns(element);
       await wait(20);
     }
     return ok;
@@ -173,8 +211,10 @@ async function fillMokaResume(profile) {
   await fillMokaAwards(profile, fill);
   await fillMokaSelfDescription(profile, fill);
 
-  return buildMappings(profile).map((mapping, index) => {
-    const element = getFields()[index];
+  const mappings = buildMokaMappings(profile);
+  mokaAnchorCache = null;
+  return mappings.map((mapping, index) => {
+    const element = getFields()[mapping.index] || getFields()[index];
     return {
       ...mapping,
       filled: Boolean(element && filled.has(element)),
@@ -195,10 +235,16 @@ async function fillMokaEducation(profile, fill) {
   if (!hasAnyValue(education)) return;
 
   const section = /教育背景|教育经历/;
-  await fillMokaDatePair(section, /教育开始时间|就读开始|入学/, /教育结束时间|就读结束|毕业/, education.startDate, education.endDate, 0, fill);
-  await fill(mokaField(section, /学校名称|学校|院校|就读学校/, 0), education.schoolName);
-  await fill(mokaField(section, /专业名称|专业/, 0), education.major);
-  await fill(mokaField(section, /^学历$|学历层次|最高学历/, 0), education.degree);
+  const [dateRow] = captureMokaDateRows(section, 1);
+  const schoolField = mokaField(section, /学校名称|学校|院校|就读学校/, 0);
+  const majorField = mokaField(section, /专业名称|专业/, 0);
+  const degreeField = mokaFields(section).find((element) =>
+      /请选择/.test(element.getAttribute?.("placeholder") || "") && !mokaDatePartUnit(element)
+    ) || mokaField(section, /^学历$|学历层次|最高学历/, 0);
+  await fill(degreeField, education.degree);
+  await fillCapturedMokaDateRow(dateRow, education.startDate, education.endDate, fill);
+  await fill(mokaField(section, /学校名称|学校|院校|就读学校/, 0) || schoolField, education.schoolName);
+  await fill(mokaField(section, /专业名称|专业/, 0) || majorField, education.major);
   await fill(mokaField(section, /院系|学院/, 0), education.college);
   await fill(mokaField(section, /成绩排名|年级排名|排名/, 0), education.rank);
   await fill(mokaField(section, /^GPA$/i, 0), education.gpa);
@@ -210,9 +256,10 @@ async function fillMokaInternships(profile, fill) {
 
   const section = /实习经历/;
   await ensureMokaRows(section, /公司名称|实习公司/, internships.length);
+  const dateRows = captureMokaDateRows(section, internships.length);
   for (let index = 0; index < internships.length; index += 1) {
     const item = internships[index] || {};
-    await fillMokaDatePair(section, /实习开始时间|起止时间/, /实习结束时间|结束时间/, item.startDate, item.endDate, index, fill);
+    await fillCapturedMokaDateRow(dateRows[index], item.startDate, item.endDate, fill);
     await fill(mokaRepeatingField(section, index, 0, 3), item.company);
     await fill(mokaRepeatingField(section, index, 1, 3), item.position);
     await fill(mokaRepeatingField(section, index, 2, 3), item.description);
@@ -225,9 +272,10 @@ async function fillMokaProjects(profile, fill) {
 
   const section = /项目经验|项目经历/;
   await ensureMokaRows(section, /项目名称/, projects.length);
+  const dateRows = captureMokaDateRows(section, projects.length);
   for (let index = 0; index < projects.length; index += 1) {
     const item = projects[index] || {};
-    await fillMokaDatePair(section, /项目开始时间|起止时间/, /项目结束时间|结束时间/, item.startDate, item.endDate, index, fill);
+    await fillCapturedMokaDateRow(dateRows[index], item.startDate, item.endDate, fill);
     await fill(mokaRepeatingField(section, index, 0, 4), item.name);
     await fill(mokaRepeatingField(section, index, 1, 4), item.role);
     await fill(mokaField(section, /项目链接|项目地址|链接/, index), item.link);
@@ -242,9 +290,10 @@ async function fillMokaAwards(profile, fill) {
 
   const section = /获奖经历|获奖信息/;
   await ensureMokaRows(section, /奖项名称|奖项说明|获奖说明/, awards.length);
+  const dateRows = captureMokaDateRows(section, awards.length, true);
   for (let index = 0; index < awards.length; index += 1) {
     const item = awards[index] || {};
-    await fillMokaAwardDate(section, item.date, index, fill);
+    await fillCapturedMokaAwardDate(dateRows[index], item.date, fill);
     await fill(mokaField(section, /获奖类型|奖项类型|奖项类别/, index), item.type);
     await fill(mokaRepeatingField(section, index, 0, 1), item.description);
   }
@@ -366,6 +415,40 @@ async function fillMokaAwardDate(sectionPattern, date, occurrence, fill) {
   await fill(mokaDateField(sectionPattern, /获奖时间|获奖日期|颁奖时间/, "月", occurrence), date);
 }
 
+function captureMokaDateRows(sectionPattern, count, awardOnly = false) {
+  const parts = mokaFields(sectionPattern).filter(mokaDatePartUnit);
+  const fieldsPerRow = awardOnly ? 2 : 4;
+  return Array.from({ length: count }, (_, index) => {
+    const base = index * fieldsPerRow;
+    return awardOnly
+      ? { year: parts[base], month: parts[base + 1] }
+      : {
+          startYear: parts[base],
+          startMonth: parts[base + 1],
+          endYear: parts[base + 2],
+          endMonth: parts[base + 3]
+        };
+  });
+}
+
+async function fillCapturedMokaDateRow(row, startDate, endDate, fill) {
+  if (!row) return;
+  if (String(startDate || "").trim()) {
+    await fill(row.startYear, startDate);
+    await fill(row.startMonth, startDate);
+  }
+  if (String(endDate || "").trim()) {
+    await fill(row.endYear, endDate);
+    await fill(row.endMonth, endDate);
+  }
+}
+
+async function fillCapturedMokaAwardDate(row, date, fill) {
+  if (!row || !String(date || "").trim()) return;
+  await fill(row.year, date);
+  await fill(row.month, date);
+}
+
 async function ensureMokaRows(sectionPattern, markerLabelPattern, desiredCount) {
   for (let attempt = 0; attempt < desiredCount + 3; attempt += 1) {
     const currentCount = mokaFields(sectionPattern).filter((element) => markerLabelPattern.test(mokaElementLabelText(element))).length;
@@ -431,7 +514,8 @@ function mokaSectionHeadingTextByAnchor(element) {
 }
 
 function mokaSectionAnchors() {
-  return [...document.querySelectorAll("body *")]
+  if (mokaAnchorCache) return mokaAnchorCache;
+  mokaAnchorCache = [...document.querySelectorAll("body *")]
     .filter(isVisibleElement)
     .map((element) => {
       const text = labelTextFromNode(element);
@@ -440,6 +524,7 @@ function mokaSectionAnchors() {
     })
     .filter((item) => item.title && isMokaSectionAnchor(item.element, item.title, item.text))
     .sort((a, b) => isNodeBefore(a.element, b.element) ? -1 : 1);
+  return mokaAnchorCache;
 }
 
 function isMokaSectionAnchor(element, title, text) {
@@ -999,10 +1084,12 @@ async function fillCustomControl(element, value) {
   const formattedValue = normalizeValueForElement(element, value);
   const rootDocument = element.ownerDocument || document;
   const fastMoka = isMokaPage();
-  const optionTimeout = fastMoka ? 420 : 700;
-  const retryTimeout = fastMoka ? 280 : 500;
-  const settleWait = fastMoka ? 70 : 110;
-  const fallbackWait = fastMoka ? 45 : 80;
+  if (fastMoka) return fillMokaCustomControl(element, formattedValue, rootDocument);
+
+  const optionTimeout = 700;
+  const retryTimeout = 500;
+  const settleWait = 110;
+  const fallbackWait = 80;
 
   await openCustomControl(element, [formattedValue, value], rootDocument);
   let option = await waitForCustomOption([formattedValue, value], rootDocument, optionTimeout);
@@ -1031,15 +1118,46 @@ async function fillCustomControl(element, value) {
     return normalize(getElementValue(element)) === normalize(formattedValue);
   }
 
-  if (fastMoka) {
-    forceCustomInputValue(element, formattedValue);
-    dispatchInputEvents(element);
+  return false;
+}
+
+async function fillMokaCustomControl(element, formattedValue, rootDocument) {
+  if (!formattedValue) return false;
+  closeOpenCustomDropdowns(element);
+
+  const trigger = element.closest?.(".el-select, .el-cascader, .el-date-editor") ||
+    element.closest?.(".el-input__wrapper, .el-select__wrapper") ||
+    element.parentElement || element;
+  clickElement(trigger);
+
+  const option = await waitForCustomOption([formattedValue], rootDocument, 180);
+  if (!option) {
     closeOpenCustomDropdowns(element);
-    await wait(fallbackWait);
-    return Boolean(getElementValue(element));
+    return false;
   }
 
-  return false;
+  const frameworkSelected = await selectFrameworkOption(element, option, formattedValue);
+  if (!frameworkSelected) clickElement(mokaOptionClickTarget(option, formattedValue));
+  await wait(frameworkSelected ? 20 : 80);
+  const selectedValue = getElementValue(element);
+  const selected = frameworkSelected || textMatchesValue(normalize(selectedValue), normalize(formattedValue));
+  if (!selected) closeOpenCustomDropdowns(element);
+  return selected;
+}
+
+function mokaOptionClickTarget(option, value) {
+  const normalizedValue = normalize(value);
+  const candidates = [option, ...option.querySelectorAll?.("*") || []]
+    .filter(isVisibleElement)
+    .filter((element) => normalize(element.innerText || element.textContent || "") === normalizedValue);
+  if (!candidates.length) return option;
+  return candidates.sort((a, b) => elementDepth(b) - elementDepth(a))[0];
+}
+
+function elementDepth(element) {
+  let depth = 0;
+  for (let node = element; node; node = node.parentElement) depth += 1;
+  return depth;
 }
 
 async function openCustomControl(element, values, rootDocument) {
@@ -1141,8 +1259,7 @@ function findVueInstance(element) {
 
 function runPageWorldSelect(element, option, value) {
   const doc = element.ownerDocument || document;
-  const host = doc.documentElement || doc.body || doc.head;
-  if (!host || !doc.createElement || !window.addEventListener || typeof CustomEvent !== "function") return Promise.resolve(false);
+  if (!doc.documentElement || !window.addEventListener || typeof CustomEvent !== "function") return Promise.resolve(false);
 
   const marker = `offeros-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   element.setAttribute("data-offeros-control-id", marker);
@@ -1158,7 +1275,7 @@ function runPageWorldSelect(element, option, value) {
     const timer = window.setTimeout(() => {
       cleanup();
       resolve(false);
-    }, 700);
+    }, 500);
     const onResult = (event) => {
       window.clearTimeout(timer);
       cleanup();
@@ -1166,40 +1283,9 @@ function runPageWorldSelect(element, option, value) {
     };
     window.addEventListener(eventName, onResult, { once: true });
 
-    const script = doc.createElement("script");
-    script.textContent = `(() => {
-      const control = document.querySelector(${JSON.stringify(`[data-offeros-control-id="${marker}"]`)});
-      const option = document.querySelector(${JSON.stringify(`[data-offeros-option-id="${marker}"]`)});
-      let ok = false;
-      const findVm = (node) => {
-        for (let current = node; current; current = current.parentElement) {
-          if (current.__vue__) return current.__vue__;
-          if (current.__vueParentComponent) return current.__vueParentComponent.ctx || current.__vueParentComponent.proxy;
-        }
-        return null;
-      };
-      try {
-        const optionVm = findVm(option);
-        const controlVm = findVm(control && (control.closest(".el-select, .el-cascader, .ant-select") || control));
-        if (optionVm && typeof optionVm.selectOptionClick === "function") {
-          optionVm.selectOptionClick();
-          ok = true;
-        } else if (controlVm && optionVm && typeof controlVm.handleOptionSelect === "function") {
-          controlVm.handleOptionSelect(optionVm, true);
-          ok = true;
-        } else if (controlVm && optionVm && typeof controlVm.$emit === "function" && optionVm.value !== undefined) {
-          controlVm.$emit("input", optionVm.value);
-          controlVm.$emit("change", optionVm.value);
-          if ("visible" in controlVm) controlVm.visible = false;
-          ok = true;
-        }
-      } catch (error) {
-        ok = false;
-      }
-      window.dispatchEvent(new CustomEvent(${JSON.stringify(eventName)}, { detail: { ok } }));
-      document.currentScript && document.currentScript.remove();
-    })();`;
-    host.appendChild(script);
+    doc.dispatchEvent(new CustomEvent("offeros:select", {
+      detail: { marker, value: String(value || "") }
+    }));
   });
 }
 

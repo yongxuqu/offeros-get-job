@@ -221,6 +221,13 @@ async function sendToTab(message) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error("没有找到当前标签页");
   if (!canRunOnPage(tab.url)) throw new Error("unsupported_page");
+  if (/(^|\.)mokahr\.com(?=\/|$)/i.test(new URL(tab.url).hostname)) {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: "MAIN",
+      files: ["page-bridge.js"]
+    });
+  }
   try {
     return await chrome.tabs.sendMessage(tab.id, message);
   } catch (error) {
