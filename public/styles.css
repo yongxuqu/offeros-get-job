@@ -1420,6 +1420,59 @@ select:focus {
   background: rgba(255, 255, 255, 0.035);
 }
 
+.plugin-setup {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.plugin-card {
+  min-height: 150px;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.plugin-card span {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(120, 243, 255, 0.42);
+  border-radius: 999px;
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.plugin-card strong {
+  font-size: 15px;
+}
+
+.plugin-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.plugin-connect {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.plugin-token-box {
+  margin-top: 12px;
+  min-height: 74px;
+}
+
 .status-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1652,6 +1705,7 @@ th {
 
   .grid.cols-4,
   .grid.cols-3,
+  .plugin-setup,
   .status-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1670,6 +1724,8 @@ th {
   .grid.cols-2,
   .grid.cols-3,
   .grid.cols-4,
+  .plugin-setup,
+  .plugin-connect,
   .status-grid,
   .resume-form {
     grid-template-columns: 1fr;

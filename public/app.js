@@ -3122,38 +3122,40 @@ const App = {
   },
 
   renderPlugin() {
-    const rows = [
-      ["姓名", "profile.name", "input[name*=name], label: 姓名"],
-      ["性别", "profile.gender", "select + label: 性别"],
-      ["国家/地区", "profile.countryRegion", "label: 国家 / 地区"],
-      ["证件类型", "profile.idType", "label: 证件号码类型"],
-      ["证件号", "profile.idNumber", "label: 证件号，敏感字段需二次确认"],
-      ["邮箱", "profile.email", "input[type=email], label: 邮箱"],
-      ["手机号码类型", "profile.phoneType", "label: 手机号码类型"],
-      ["手机号", "profile.phone", "input[type=tel], label: 手机"],
-      ["当前所处地", "profile.currentLocation", "label: 当前所处地 / 现居城市"],
-      ["微信号", "profile.wechat", "label: 微信"],
-      ["QQ 号", "profile.qq", "label: QQ"],
-      ["紧急联系人", "profile.emergencyContact", "label: 紧急联系人"],
-      ["紧急联系人电话", "profile.emergencyPhone", "label: 紧急联系人电话"],
-      ["最高学历", "education.0.degree", "select + label: 学历"],
-      ["学校名称", "education.0.schoolName", "label: 学校"],
-      ["院系/专业", "education.0.college / education.0.major", "label: 院系、专业"],
-      ["实习经历", "internships.0.* / internships", "公司、职位、起止时间、描述"],
-      ["项目经历", "projects.0.* / projects", "项目名、角色、起止时间、链接、描述"],
-      ["获奖信息", "awards.0.* / awards", "获奖类型、时间、奖项说明"],
-      ["作品主页", "portfolios.0.* / portfolios", "作品名、链接、提取码"],
-    ];
+    const extensionVersion = "0.5.10";
+    const downloadUrl = `/downloads/offeros-extension-v${extensionVersion}.zip`;
     return `
       <section class="section-title">
         <div>
-          <h2>插件字段映射</h2>
-          <p>插件用连接令牌从主站拉取结构化简历字段，填表前仍由用户确认。</p>
+          <h2>OfferOS 填表助手</h2>
+          <p>下载插件后在 Chrome 开发者模式中加载，连接本站后可同步你的简历信息。</p>
         </div>
-        <button class="btn primary" onclick="App.generatePluginToken()">生成插件连接令牌</button>
+        <a class="btn primary" href="${downloadUrl}" download>下载插件 Beta</a>
       </section>
       <section class="panel">
-        <div class="grid cols-2" style="margin-bottom: 16px;">
+        <div class="plugin-setup">
+          <div class="plugin-card">
+            <span>1</span>
+            <strong>下载并解压插件</strong>
+            <p>下载 zip 后解压，保留解压出来的整个插件文件夹。</p>
+          </div>
+          <div class="plugin-card">
+            <span>2</span>
+            <strong>打开 Chrome 扩展程序</strong>
+            <p>访问 chrome://extensions，开启右上角开发者模式。</p>
+          </div>
+          <div class="plugin-card">
+            <span>3</span>
+            <strong>加载已解压的扩展程序</strong>
+            <p>选择解压后的插件文件夹，看到 OfferOS 填表助手即安装完成。</p>
+          </div>
+          <div class="plugin-card">
+            <span>4</span>
+            <strong>同步简历并填表</strong>
+            <p>生成连接令牌，填入插件弹窗，进入网申页面后扫描并确认填充。</p>
+          </div>
+        </div>
+        <div class="plugin-connect">
           <div class="list-item">
             <strong>主站地址</strong>
             <div class="muted">${this.escape(window.location.origin)}</div>
@@ -3162,13 +3164,10 @@ const App = {
             <strong>连接令牌</strong>
             <div class="muted">生成后只显示一次，填到 Chrome 插件弹窗里。</div>
           </div>
+          <button class="btn primary" onclick="App.generatePluginToken()">生成插件连接令牌</button>
         </div>
-        ${this.state.pluginToken ? `<textarea readonly>${this.escape(this.state.pluginToken)}</textarea>` : ""}
-        <table>
-          <thead><tr><th>网申页面字段</th><th>本站结构化字段</th><th>识别依据</th></tr></thead>
-          <tbody>${rows.map((row) => `<tr><td>${this.escape(row[0])}</td><td>${this.escape(row[1])}</td><td>${this.escape(row[2])}</td></tr>`).join("")}</tbody>
-        </table>
-        <div class="notice">安全原则：只自动填充，不自动提交；身份证、住址、附件等敏感字段需要二次确认。</div>
+        ${this.state.pluginToken ? `<textarea class="plugin-token-box" readonly>${this.escape(this.state.pluginToken)}</textarea>` : ""}
+        <div class="notice">插件只负责辅助填充，不会自动提交网申表单。身份证、附件等敏感信息请在提交前自行确认。</div>
       </section>
     `;
   },
